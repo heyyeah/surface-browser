@@ -7,9 +7,10 @@ import { isEditModel, recommendedSteps, recommendedStepsSummary } from "../serve
 test("recommended steps come from the model file name", () => {
   assert.equal(recommendedSteps("flux_2_klein_4b_q8p.ckpt"), 4);
   assert.equal(recommendedSteps("moss_image_sft_q8p.ckpt"), 30);
+  assert.equal(recommendedSteps("krea_2_turbo_q8p.ckpt"), 8);
   assert.equal(recommendedSteps("sd_xl_base_1.0.safetensors"), null);
   assert.equal(recommendedSteps(""), null);
-  assert.equal(recommendedStepsSummary(), "FLUX.2 Klein: 4, Moss: 30");
+  assert.equal(recommendedStepsSummary(), "FLUX.2 Klein: 4, Moss: 30, Krea 2 Turbo: 8");
 });
 
 test("edit models are told apart from repaint-at-strength ones", () => {

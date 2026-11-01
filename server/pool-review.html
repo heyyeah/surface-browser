@@ -34,7 +34,8 @@
   section.prompt > h2 { font-size: 14px; margin: 0 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
   .base { margin: 0 0 16px 0; padding-left: 10px; border-left: 3px solid var(--line); }
   .base > h3 { font-size: 12px; margin: 0 0 6px; display: flex; align-items: center; gap: 8px; }
-  .keyrow { margin: 8px 0 10px; }
+  .lineage { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: flex-start; }
+  .keyrow { margin: 0; max-width: 100%; }
   .keyrow > h4 { font-size: 12px; margin: 0 0 4px; font-weight: 600; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
   .depth { font-weight: 400; color: var(--dim); }
   .depth.thin { color: var(--bad); font-weight: 600; }
@@ -68,7 +69,7 @@
     <label>created to<input type="date" id="to"></label>
     <label>prompt contains<input type="search" id="prompt" size="22"></label>
     <label>emoji<select id="emoji"><option value="">any</option></select></label>
-    <label class="inline"><input type="checkbox" id="showHidden" checked> show deleted</label>
+    <label class="inline"><input type="checkbox" id="showHidden" checked> show hidden</label>
     <button id="reload">Apply</button>
     <button id="clearFilters">Clear filters</button>
   </div>
@@ -127,15 +128,16 @@ function fillEmoji() {
 
 function renderSummary() {
   const p = data.pack;
+  $("restore").hidden = !p.suppressedCount;
   $("summary").innerHTML = [
     p.dir ? `pack <code>${esc(p.dir)}</code>` : "no pack",
     data.grow.dir ? `grown <code>${esc(data.grow.dir)}</code> (at most ${data.grow.maxPerKey} per key)` : "",
     data.grow.error ? `<span class="warn">growth off: ${esc(data.grow.error)}</span>` : "",
     `${p.keyCount} keys`,
     `<strong>${p.memberCount} drawable</strong> of ${p.totalMembers} (${p.totalMembers - p.grownMembers} baked, ${p.grownMembers} grown)`,
-    `${p.suppressedCount} deleted`,
+    p.suppressedCount ? `${p.suppressedCount} hidden` : "",
     p.missingFiles ? `<span class="warn">${p.missingFiles} manifest entries have no file</span>` : "",
-    `tombstones: <code>${esc(data.suppression.path)}</code>`,
+    p.suppressedCount ? `tombstones: <code>${esc(data.suppression.path)}</code>` : "",
     data.suppression.error ? `<span class="warn">${esc(data.suppression.error)}</span>` : "",
     p.error ? `<span class="warn">pack not loaded: ${esc(p.error)}</span>` : ""
   ].filter(Boolean).join(" · ");
@@ -175,7 +177,7 @@ function group() {
 
 function depthLabel(key) {
   const thin = key.depth === 0 ? " thin" : "";
-  const hidden = key.suppressedDepth ? ` · ${key.suppressedDepth} deleted` : "";
+  const hidden = key.suppressedDepth ? ` · ${key.suppressedDepth} hidden` : "";
   return `<span class="depth${thin}">depth ${key.depth}${hidden}</span>`;
 }
 
@@ -189,7 +191,7 @@ function tile(member) {
   ].filter(Boolean).join(" · ");
   return `<figure class="${member.suppressed ? "hidden" : ""}${member.store === "grown" ? " grown" : ""}">
     <input type="checkbox" data-id="${esc(member.id)}" ${selected.has(member.id) ? "checked" : ""}>
-    ${member.suppressed ? '<span class="tag">deleted</span>' : ""}
+    ${member.suppressed ? '<span class="tag">hidden</span>' : ""}
     <img loading="lazy" src="/api/pool/image/${esc(member.id)}?w=256" data-id="${esc(member.id)}"
          data-caption="${esc(member.file)} — ${esc(bits)}" alt="${esc(member.file)}">
     <figcaption>${esc(bits)}</figcaption>
@@ -217,13 +219,15 @@ function render() {
       ).join("") || '<div class="keyrow"><h4><span class="depth thin">no variations baked from this base</span></h4></div>';
       return `<div class="base">
         <h3>base ${esc(base.member.id.slice(0, 12))} ${depthLabel(base.key)}</h3>
-        <div class="grid">${tile(base.member)}</div>
-        ${variations}
+        <div class="lineage">
+          <div class="keyrow"><h4><span class="depth">original</span></h4><div class="grid">${tile(base.member)}</div></div>
+          ${variations}
+        </div>
       </div>`;
     }).join("");
     const orphans = bucket.orphans.length
-      ? `<div class="base"><h3>variations whose base is not in this view</h3>${
-          bucket.orphans.map((key) => keyBlock(key, esc(key.emoji || "—"))).join("")}</div>`
+      ? `<div class="base"><h3>variations whose base is not in this view</h3><div class="lineage">${
+          bucket.orphans.map((key) => keyBlock(key, esc(key.emoji || "—"))).join("")}</div></div>`
       : "";
     const totals = bucket.bases.length + bucket.orphans.length;
     return `<section class="prompt"><h2>${esc(bucket.name || "(no prompt)")}
@@ -289,7 +293,10 @@ $("delete").addEventListener("click", () => {
   // Two steps, always: the first click only asks.
   if ($("confirm").hidden) {
     $("confirm").hidden = false;
-    $("confirm").textContent = `Hide ${selected.size} image(s) from the pool? The files stay in the pack and Restore brings them back.`;
+    const members = data.keys.flatMap((key) => key.members).filter((member) => selected.has(member.id));
+    const hideOnly = members.filter((member) => member.store !== "grown").length;
+    $("confirm").textContent = `Permanently delete ${selected.size} image(s)? This can't be undone.`
+      + (hideOnly ? ` ${hideOnly} baked image(s) are only hidden: they stay in the pack.` : "");
     $("delete").textContent = `Yes, delete ${selected.size}`;
     return;
   }

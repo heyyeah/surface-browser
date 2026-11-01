@@ -7,7 +7,13 @@
 //
 // Pure: no DOM, no three.js, no state.
 
-import { SPHERE_ENTRY_LEAD_RINGS, SPHERE_EXIT_DISTANCE_RINGS } from "./constants.js";
+import {
+  IMAGE_SPAWN_MAX_INTERVAL_MS,
+  IMAGE_SPAWN_MAX_LOADS_IN_FLIGHT,
+  IMAGE_SPAWN_SPACING_RINGS,
+  SPHERE_ENTRY_LEAD_RINGS,
+  SPHERE_EXIT_DISTANCE_RINGS
+} from "./constants.js";
 
 export const TUNNEL_RUN_START_RING = 5;
 
@@ -55,4 +61,16 @@ export function easeTunnelSpeed(current, target, dt, tau = TUNNEL_SPEED_EASE_TAU
     return { speed: to, done: true };
   }
   return { speed: blended, done: false };
+}
+
+// One frame of the image feed. `progress` counts up to 1 per image, so it holds
+// at most one slot: a stall on the network never releases a burst afterward.
+export function stepImageFeed({ progress, ringsPerSecond, dtS, loadsInFlight }) {
+  const byDistance = (ringsPerSecond * dtS) / IMAGE_SPAWN_SPACING_RINGS;
+  const byTime = (dtS * 1000) / IMAGE_SPAWN_MAX_INTERVAL_MS;
+  const next = Math.min(1, progress + Math.max(byDistance, byTime));
+  if (next >= 1 && loadsInFlight < IMAGE_SPAWN_MAX_LOADS_IN_FLIGHT) {
+    return { progress: 0, spawn: true };
+  }
+  return { progress: next, spawn: false };
 }

@@ -57,7 +57,7 @@ test("only the right stick is four-way, and only inside the sphere", () => {
   const rightSphere = byId(resolveControllerCallouts({ handedness: "right", appState: SPHERE }));
 
   assert.equal(leftTunnel.get("left-stick-axes").glyph, GLYPH_UP_DOWN);
-  assert.equal(leftSphere.get("left-stick-axes").glyph, GLYPH_UP_DOWN);
+  assert.equal(leftSphere.get("left-stick-axes").glyph, GLYPH_FOUR_WAY);
   assert.equal(rightTunnel.get("right-stick-axes").glyph, GLYPH_UP_DOWN);
   assert.equal(rightSphere.get("right-stick-axes").glyph, GLYPH_FOUR_WAY);
 });
@@ -66,7 +66,7 @@ test("the stick labels follow the state", () => {
   const leftTunnel = byId(resolveControllerCallouts({ handedness: "left", appState: TUNNEL }));
   const leftSphere = byId(resolveControllerCallouts({ handedness: "left", appState: SPHERE }));
   assert.equal(leftTunnel.get("left-stick-axes").labelKey, "callout.speed");
-  assert.equal(leftSphere.get("left-stick-axes").labelKey, "callout.zoom");
+  assert.equal(leftSphere.get("left-stick-axes").labelKey, "callout.zoomRoll");
 
   const rightSphere = byId(resolveControllerCallouts({ handedness: "right", appState: SPHERE }));
   assert.equal(rightSphere.get("right-stick-axes").labelKey, "callout.rotate");

@@ -29,12 +29,12 @@ const DEFAULT_BOOKMARKS = Object.freeze([
   { kind: BookmarkKind.GENAI_PROMPT, value: "a liminal space of light and glass", start: true },
   { kind: BookmarkKind.GENAI_PROMPT, value: "sunday evening", start: true },
   { kind: BookmarkKind.GENAI_PROMPT, value: "giraffe in an overgrown brutalist ruin", start: true },
-  { kind: BookmarkKind.WEB_PAGE, value: "https://commons.wikimedia.org/wiki/Commons:Picture_of_the_day", title: "Wikimedia Picture of the Day" },
-  { kind: BookmarkKind.WEB_PAGE, value: "https://www.nasa.gov/image-of-the-day/", title: "NASA Image of the Day" },
-  { kind: BookmarkKind.WEB_PAGE, value: "https://solarsystem.nasa.gov/solar-system/sun/overview/", title: "NASA Solar System Overview" },
   { kind: BookmarkKind.WEB_PAGE, value: "https://artforum.com" },
   { kind: BookmarkKind.WEB_PAGE, value: "https://www.theartnewspaper.com/keywords/digital-art" },
-  { kind: BookmarkKind.WEB_PAGE, value: "https://www.monopol-magazin.de" }
+  { kind: BookmarkKind.WEB_PAGE, value: "https://www.monopol-magazin.de" },
+  { kind: BookmarkKind.WEB_PAGE, value: "https://commons.wikimedia.org/wiki/Commons:Picture_of_the_day", title: "Wikimedia Picture of the Day" },
+  { kind: BookmarkKind.WEB_PAGE, value: "https://www.nasa.gov/image-of-the-day/", title: "NASA Image of the Day" },
+  { kind: BookmarkKind.WEB_PAGE, value: "https://solarsystem.nasa.gov/solar-system/sun/overview/", title: "NASA Solar System Overview" }
 ]);
 
 // One start tile per category, picked at random from its `start` bookmarks.

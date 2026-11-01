@@ -8,6 +8,7 @@
 //                                                   stepReleaseVelocity / releaseHandoff)
 //   One finger held still     -> the drag BRAKE    (ROTATE_BRAKE_HOLD_MS, deadzone)
 //   Two-finger pinch          -> the DISTANCE gesture (tunnel speed / sphere zoom)
+//   Two-finger twist          -> sphere roll about the gaze axis (sphere only)
 //   Two-finger press and hold -> the GenAI chord, with a confirm hold
 //
 // There is no new rotation maths here. Screen pixels become the metres the VR
@@ -66,6 +67,18 @@ const TOUCH_CHORD_HOLD_MS = 600;
 // TOUCH_CHORD_HOLD_MS regardless.
 const TOUCH_CHORD_RING_DELAY_MS = 200;
 
+// Twist must turn the finger pair this far before it rolls the sphere, so a
+// plain pinch, whose fingers never travel exactly radially, does not wobble it.
+// The dead zone is absorbed rather than delivered as a jump on engage.
+const TOUCH_TWIST_DEADZONE_RAD = 8 * Math.PI / 180;
+
+// A twist released faster than this keeps spinning (and coasts like a throw).
+const TOUCH_TWIST_THROW_RAD_PER_S = 1.2;
+
+// Smoothing for the twist's angular velocity, so the release reads the last
+// ~60 ms of motion rather than one jittery frame.
+const TOUCH_TWIST_VELOCITY_TAU_S = 0.06;
+
 // Hand travel (metres) that one short screen edge of finger travel is worth.
 // At HAND_SPHERE_YAW_RAD_PER_M = 4.0, 0.35 m is 1.4 rad (~80 deg) of sphere.
 // Deadzone, brake and throw threshold are in metres too, so raising this makes
@@ -91,6 +104,15 @@ function clamp01(value) {
 
 function distancePx(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+// Into (-PI, PI], so a pair crossing atan2's seam reads as a small turn.
+function wrapAngle(rad) {
+  return rad - 2 * Math.PI * Math.round(rad / (2 * Math.PI));
+}
+
+function pairAngle(a, b) {
+  return Math.atan2(b.y - a.y, b.x - a.x);
 }
 
 function travelPx(pointer) {
@@ -143,6 +165,14 @@ const IDLE_DISTANCE = {
   deltaM: 0
 };
 
+const IDLE_TWIST = {
+  active: false,
+  // Clockwise on screen is positive (screen y points down).
+  deltaRad: 0,
+  // Set on the release step when the twist was thrown; otherwise null.
+  releaseSpinRadPerS: null
+};
+
 const IDLE_CHORD = {
   active: false,
   progress: 0,
@@ -160,6 +190,7 @@ function idleDecision() {
     selectPoint: null,
     rotate: { ...IDLE_ROTATE },
     distance: { ...IDLE_DISTANCE },
+    twist: { ...IDLE_TWIST },
     chord: { ...IDLE_CHORD },
     setPaused: null,
     pauseSource: ""
@@ -258,6 +289,8 @@ function stepTouchGestures(prev, {
   tapMaxMovePx = TOUCH_TAP_MAX_MOVE_PX,
   tapMaxMs = TOUCH_TAP_MAX_MS,
   pinchSlopPx = TOUCH_PINCH_SLOP_PX,
+  twistDeadzoneRad = TOUCH_TWIST_DEADZONE_RAD,
+  twistThrowRadPerS = TOUCH_TWIST_THROW_RAD_PER_S,
   chordHoldMs = TOUCH_CHORD_HOLD_MS,
   chordRingDelayMs = TOUCH_CHORD_RING_DELAY_MS,
   brakeHoldMs = ROTATE_BRAKE_HOLD_MS,
@@ -310,6 +343,10 @@ function stepTouchGestures(prev, {
   if (state.pinch && !pairIntact) {
     // A member lifted or was swept: the pair is finished for this episode and
     // does not re-form from the fingers that are left.
+    if (state.pinch.twistEngaged && inSphere && gatesOpen
+      && Math.abs(state.pinch.twistVelocity) >= twistThrowRadPerS) {
+      decision.twist = { ...IDLE_TWIST, releaseSpinRadPerS: state.pinch.twistVelocity };
+    }
     state.pinch = null;
     state.pinchDone = true;
   }
@@ -332,6 +369,10 @@ function stepTouchGestures(prev, {
       startBX: second.x,
       startBY: second.y,
       startSeparationPx: distancePx(first, second),
+      startAngle: pairAngle(first, second),
+      lastAngle: pairAngle(first, second),
+      twistEngaged: false,
+      twistVelocity: 0,
       engaged: false,
       // The chord exists only inside the sphere, and only where there is
       // something for it to buy.
@@ -370,6 +411,28 @@ function stepTouchGestures(prev, {
           target: inSphere ? "sphereZoom" : "tunnelSpeed",
           deltaM: (separationPx - state.pinch.startSeparationPx) * metersPerPixel
         };
+      }
+
+      // Twist, alongside the zoom rather than instead of it: separation and angle
+      // are independent, so one two-finger gesture can do both, as in map apps.
+      const angle = pairAngle(first, second);
+      if (inSphere && gatesOpen) {
+        if (!state.pinch.twistEngaged) {
+          if (Math.abs(wrapAngle(angle - state.pinch.startAngle)) >= twistDeadzoneRad) {
+            state.pinch.twistEngaged = true;
+            state.pinch.engaged = true;
+            state.pinch.chordCancelled = true;
+            state.pinch.lastAngle = angle;
+          }
+        } else {
+          const deltaRad = wrapAngle(angle - state.pinch.lastAngle);
+          state.pinch.lastAngle = angle;
+          if (step > 0) {
+            const blend = Math.min(1, step / TOUCH_TWIST_VELOCITY_TAU_S);
+            state.pinch.twistVelocity += (deltaRad / step - state.pinch.twistVelocity) * blend;
+          }
+          decision.twist = { ...IDLE_TWIST, active: true, deltaRad };
+        }
       }
 
       // Confirm hold. Firing requires the hold to run to completion with neither
@@ -566,6 +629,8 @@ export {
   TOUCH_TAP_MAX_MOVE_PX,
   TOUCH_TAP_MAX_MS,
   TOUCH_PINCH_SLOP_PX,
+  TOUCH_TWIST_DEADZONE_RAD,
+  TOUCH_TWIST_THROW_RAD_PER_S,
   TOUCH_CHORD_HOLD_MS,
   TOUCH_CHORD_RING_DELAY_MS,
   TOUCH_DRAG_HAND_METERS_PER_SHORT_EDGE,

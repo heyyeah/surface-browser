@@ -1,7 +1,7 @@
 import dns from "node:dns/promises";
 import net from "node:net";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Agent as UndiciAgent } from "undici";
+import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import { normalizeHostname, parseAllowedTargetHosts, parseNonNegativeInteger } from "./env.js";
 import { RequestPolicyError } from "./errors.js";
 import { isBlockedIpAddress } from "./ip-blocklist.js";
@@ -129,8 +129,12 @@ export function browserUserAgent() {
 // then 127.0.0.1 or a cloud metadata address when fetch() dials. Pinning the
 // validated address(es) into a per-call dispatcher means the socket can only go
 // somewhere the guard looked at.
+//
+// Must be used with undici's own fetch: Node's built-in fetch bundles an older
+// undici whose handlers an undici 8 Agent rejects ("invalid onRequestStart method").
 export function createPinnedDispatcher(addresses) {
   return new UndiciAgent({
+    allowH2: false,
     connect: {
       lookup: (_hostname, _options, callback) => {
         callback(null, addresses.map((record) => ({ address: record.address, family: record.family })));
@@ -154,7 +158,7 @@ export async function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TI
     const timeout = setTimeout(() => controller.abort(), remainingMs);
     let response;
     try {
-      response = await fetch(nextUrl, {
+      response = await undiciFetch(nextUrl, {
         ...options,
         signal: controller.signal,
         redirect: "manual",

@@ -32,7 +32,7 @@ export const state = {
 
   // Tunnel image-panel spawn pipeline. Owner: tunnel.js.
   pendingPanelItems: [],
-  spawnAccumulatorMs: 0,
+  spawnProgress: 0,
   lastSpawnedPanelRing: 25,
   // Successful tunnel-panel attachments during the current load. Unlike the live
   // scene array, this stays monotonic when panels scroll behind the camera.
@@ -130,6 +130,8 @@ export const state = {
   sphereSelectionPulseElapsed: 0,
   sphereXRotSpeed: 0,
   sphereYRotSpeed: 0,
+  // Roll about the viewer's gaze axis (touch twist, left stick X, Alt+drag).
+  sphereZRotSpeed: 0,
   // How fast the two speeds above coast away once nothing drives them, as a time
   // constant in seconds (sphere.js stepCoastSpeed). It depends on the momentum's
   // source: a spring-centred stick uses SPHERE_COAST_TAU_STICK_S (0.22 s), a hand

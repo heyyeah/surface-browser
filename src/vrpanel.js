@@ -7,7 +7,8 @@
 // Anchoring: the quad is parented to `scene` (NOT `worldGroup`), so the world-moves
 // locomotion in updateWorldTransform() scrolls the content past it without dragging
 // the panel along. On open it is placed in front of the camera's current yaw and
-// left put (head-locked panels induce nausea).
+// left put (head-locked panels induce nausea). The idle launcher instead keeps to
+// the tunnel axis (idle-anchor.js).
 //
 // Interaction reuses input.js's XR input path and the bookmark load functions
 // (loadAndExtractUrl / loadImageSearch / loadGenAiPrompt).
@@ -15,6 +16,8 @@
 import * as THREE from "three";
 import { DEFAULT_BOOKMARKS, BookmarkKind, bookmarkTitle, startFavoriteBookmarks } from "./bookmarks.js";
 import { canGoBack, goBack, loadAndExtractUrl, loadGenAiPrompt, loadImageSearch } from "./api.js";
+import { bookmarkGridLayout, bookmarkUrlLine } from "./vrpanel-grid.js";
+import { gazeYawFromForward, idleAnchorTargetYaw, stepIdleAnchorYaw } from "./idle-anchor.js";
 import { urlInput } from "./dom.js";
 import { menuStatusText } from "./tunnel-progress.js";
 import { t, getLanguage } from "./i18n.js";
@@ -37,6 +40,7 @@ import {
   mediaRecordingSupported
 } from "./voice.js";
 import { drawKeyboard, applyKeyAction } from "./vrkeyboard.js";
+import { isSubmissionsEnabled, sendSubmission, submissionDefaults } from "./submissions.js";
 import {
   selectRaySlotSources,
   fillSlotRayTargets,
@@ -111,6 +115,11 @@ const COLOR_CONFIRM = "#245b44";
 const COLOR_CONFIRM_HOVER = "#2f7a5b";
 const COLOR_CANCEL = "#553247";
 const COLOR_CANCEL_HOVER = "#74445f";
+// Submit form.
+const SUBMIT_LABEL_H = 36;
+const SUBMIT_FIELD_H = 88;
+const SUBMIT_ROW_GAP = 22;
+
 // Keyboard-launcher cell.
 const COLOR_KBD = "#243657";
 const COLOR_KBD_HOVER = "#325082";
@@ -139,8 +148,10 @@ const STATUS_TOGGLE_CELL_W = 190;
 const PASSTHROUGH_CELL_W = 250;
 const TOOLBAR_ICON_PX = 40;
 const BOTTOM_GAP = 18;
-const GRID_COLS = 3;
 const CELL_GAP = 18;
+const SCROLL_STRIP_W = 64;
+const STICK_SCROLL_THRESHOLD = 0.5;
+const STICK_SCROLL_REPEAT_MS = 220;
 // The top row's corner buttons: history back on the left, close (×) on the
 // right. Left stick press and left Y do the same, but nothing on the panel said
 // so. The status bar, or the mode row when there is none, sits between them.
@@ -416,6 +427,11 @@ let serverSttEnabled = false;
 // keyboard over the bookmark grid and composes into `keyboardText`.
 let keyboardOpen = false;
 let keyboardText = "";
+// Set while the keyboard is editing a Submit form field rather than a query.
+let keyboardField = null;
+// The Submit form, drawn over the bookmark grid below the mode row, which is its
+// type selector: { query, name, status }, status being null, "sending" or a result.
+let submitForm = null;
 let panelMode = "main";
 // Help uses pages rather than squeezing every controller binding into one canvas.
 let helpView = "basic";
@@ -434,11 +450,19 @@ let helpTexture = null;
 let helpMesh = null;
 let panelVisible = false;
 let panelAnchorStabilizeUntil = 0;
+let bookmarkScrollRow = 0;
+let bookmarkScrollPage = 1;
+let bookmarkMaxScrollRow = 0;
+let nextStickScrollMs = 0;
+let idleAnchorYaw = 0;
+let idleAnchorLastMs = 0;
+const _idleGazeDir = new THREE.Vector3();
 
 let exitCanvas = null;
 let exitCtx = null;
 let exitTexture = null;
 let exitMesh = null;
+let exitOverlayDrawnStep = -1;
 let exitHoldHideTimer = null;
 
 // Interactive rects in canvas pixel space: { x, y, w, h, action }.
@@ -545,6 +569,9 @@ function setActiveMode(modeId) {
     return;
   }
   const changed = activeModeId !== modeId || !modeChosenExplicitly;
+  if (activeModeId !== modeId) {
+    bookmarkScrollRow = 0;
+  }
   activeModeId = modeId;
   modeChosenExplicitly = true;
   if (!changed) {
@@ -582,9 +609,33 @@ function runAction(action) {
     drawPanel();
     return;
   }
+  if (action.type === "submitOpen") {
+    openSubmitForm();
+    return;
+  }
+  if (action.type === "submitEdit") {
+    openKeyboard(submitForm?.[action.field] || "", action.field);
+    return;
+  }
+  if (action.type === "submitSend") {
+    void sendSubmitForm();
+    return;
+  }
+  if (action.type === "submitCancel") {
+    submitForm = null;
+    drawPanel();
+    return;
+  }
   if (action.type === "kbDone") {
     const text = keyboardText;
+    const field = keyboardField;
     closeKeyboard();
+    if (field && submitForm) {
+      submitForm[field] = text.trim();
+      submitForm.status = null;
+      drawPanel();
+      return;
+    }
     void activateQueryForActiveMode(text);
     return;
   }
@@ -618,6 +669,7 @@ function runAction(action) {
     return;
   }
   if (action.type === "historyBack") {
+    submitForm = null;
     void goBack();
     return;
   }
@@ -651,6 +703,10 @@ function runAction(action) {
     reRecordTranscript();
     return;
   }
+  if (action.type === "bookmarkScroll") {
+    scrollBookmarks(action.direction * bookmarkScrollPage);
+    return;
+  }
   if (action.type === "bookmark") {
     void activateBookmark(action.bookmark);
   }
@@ -659,18 +715,43 @@ function runAction(action) {
 // Canvas keyboard open/close. Layout and drawing live in vrkeyboard.js; this owns
 // the open state and the composed-text buffer.
 
-function openKeyboard() {
+function openKeyboard(initialText = "", field = null) {
   // Opening the keyboard cancels any in-flight dictation.
   stopVoiceSession();
   voiceStatusText = null;
   keyboardOpen = true;
-  keyboardText = "";
+  keyboardText = initialText;
+  keyboardField = field;
   drawPanel();
 }
 
 function closeKeyboard() {
   keyboardOpen = false;
   keyboardText = "";
+  keyboardField = null;
+}
+
+function openSubmitForm() {
+  const defaults = submissionDefaults({ lastLoad: state.menuLoad, menuKind: activeMode().kind });
+  const mode = MODES.find((candidate) => candidate.kind === defaults.kind);
+  if (mode) {
+    setActiveMode(mode.id);
+  }
+  submitForm = { query: defaults.query, name: defaults.name, status: null };
+  drawPanel();
+}
+
+async function sendSubmitForm() {
+  const form = submitForm;
+  if (!form?.query || form.status === "sending" || form.status === "sent") {
+    return;
+  }
+  form.status = "sending";
+  drawPanel();
+  form.status = await sendSubmission({ kind: activeMode().kind, query: form.query, name: form.name });
+  if (submitForm === form) {
+    drawPanel();
+  }
 }
 
 // Voice dictation entry chain: Web Speech -> server STT (if stt.enabled and
@@ -1317,31 +1398,45 @@ function drawPanel() {
     return;
   }
 
+  if (submitForm) {
+    drawSubmitRegion(ctx);
+    drawPointerDot(ctx);
+    panelTexture.needsUpdate = true;
+    return;
+  }
+
   // --- Bookmark grid --------------------------------------------------------
   const bookmarks = visibleBookmarks();
+  const submitCell = isSubmissionsEnabled();
   const gridTop = contentTop() + MODE_BAR_H + 24;
   const gridBottom = CANVAS_HEIGHT - PAD - BACK_BAR_H - 24;
   const gridLeft = PAD;
   const gridWidth = CANVAS_WIDTH - PAD * 2;
-  const rows = Math.ceil(bookmarks.length / GRID_COLS);
-  const cellW = (gridWidth - CELL_GAP * (GRID_COLS - 1)) / GRID_COLS;
-  const cellH = rows > 0
-    ? (gridBottom - gridTop - CELL_GAP * (rows - 1)) / rows
-    : 0;
+  const layout = bookmarkGridLayout({
+    count: bookmarks.length + (submitCell ? 1 : 0),
+    height: gridBottom - gridTop,
+    gap: CELL_GAP,
+    scrollRow: bookmarkScrollRow
+  });
+  bookmarkScrollRow = layout.firstRow;
+  bookmarkScrollPage = layout.visibleRows;
+  bookmarkMaxScrollRow = layout.maxScrollRow;
+  const cellsWidth = layout.maxScrollRow > 0 ? gridWidth - SCROLL_STRIP_W - CELL_GAP : gridWidth;
+  const cellW = (cellsWidth - CELL_GAP * (layout.cols - 1)) / layout.cols;
 
-  for (let i = 0; i < bookmarks.length; i += 1) {
-    const bookmark = bookmarks[i];
-    const col = i % GRID_COLS;
-    const row = Math.floor(i / GRID_COLS);
+  for (let i = layout.firstIndex; i < layout.endIndex; i += 1) {
+    const bookmark = bookmarks[i] || null;
+    const col = i % layout.cols;
+    const row = Math.floor(i / layout.cols) - layout.firstRow;
     const x = gridLeft + col * (cellW + CELL_GAP);
-    const y = gridTop + row * (cellH + CELL_GAP);
-    const action = { type: "bookmark", bookmark };
+    const y = gridTop + row * (layout.cellH + CELL_GAP);
+    const action = bookmark ? { type: "bookmark", bookmark } : { type: "submitOpen" };
     const rectIndex = hitRects.length;
     const hovered = hoverIndex === rectIndex;
 
-    const modeColor = bookmarkModeColor[bookmark.kind] || COLOR_MODE_WEB;
+    const modeColor = bookmarkModeColor[activeMode().kind] || COLOR_MODE_WEB;
     ctx.fillStyle = hovered ? COLOR_CELL_HOVER : COLOR_CELL;
-    drawRoundedRect(ctx, x, y, cellW, cellH, 12);
+    drawRoundedRect(ctx, x, y, cellW, layout.cellH, 12);
     ctx.fill();
     // The section's colour, faded: a hint of which mode the cell belongs to
     // that stays quieter than the active mode cell's full-strength outline.
@@ -1349,28 +1444,33 @@ function drawPanel() {
     ctx.strokeStyle = `${modeColor}${BOOKMARK_OUTLINE_ALPHA_HEX}`;
     ctx.stroke();
 
-    // Mode chip.
-    ctx.fillStyle = modeColor;
-    ctx.font = "700 20px 'Segoe UI', sans-serif";
-    ctx.textBaseline = "top";
-    ctx.fillText(bookmarkModeLabel(bookmark.kind), x + 16, y + 14);
-
-    // Title (single line, clipped to cell).
+    const textWidth = cellW - 32;
+    const title = bookmark ? bookmarkTitle(bookmark) : t("submit.cell");
+    const urlLine = !bookmark
+      ? t("submit.cellHint")
+      : (bookmark.kind === BookmarkKind.WEB_PAGE ? bookmarkUrlLine(bookmark.value, title) : null);
+    const middle = y + layout.cellH / 2;
+    ctx.textBaseline = "middle";
     ctx.fillStyle = COLOR_TEXT;
     ctx.font = "500 26px 'Segoe UI', sans-serif";
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(x + 14, y + 44, cellW - 28, cellH - 52);
-    ctx.clip();
-    ctx.fillText(bookmarkTitle(bookmark), x + 16, y + 50);
-    ctx.restore();
+    ctx.fillText(middleEllipsizeCanvasText(ctx, title, textWidth), x + 16, urlLine ? middle - 15 : middle);
+    if (urlLine) {
+      ctx.fillStyle = COLOR_MUTED;
+      ctx.font = "400 20px 'Segoe UI', sans-serif";
+      ctx.fillText(middleEllipsizeCanvasText(ctx, urlLine, textWidth), x + 16, middle + 17);
+    }
+    ctx.textBaseline = "top";
 
-    hitRects.push({ x, y, w: cellW, h: cellH, action });
+    hitRects.push({ x, y, w: cellW, h: layout.cellH, action });
+  }
+
+  if (layout.maxScrollRow > 0) {
+    drawBookmarkScrollStrip(ctx, CANVAS_WIDTH - PAD - SCROLL_STRIP_W, gridTop, gridBottom - gridTop);
   }
 
   // Empty-state hint when the active mode has no presets (e.g. GenAI gated off,
   // or a mode with no matching bookmarks). Voice still works as an entry path.
-  if (bookmarks.length === 0) {
+  if (bookmarks.length === 0 && !submitCell) {
     ctx.fillStyle = COLOR_MUTED;
     ctx.font = "400 28px 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
@@ -1389,6 +1489,77 @@ function drawPanel() {
   // --- Pointer dot ----------------------------------------------------------
   drawPointerDot(ctx);
   panelTexture.needsUpdate = true;
+}
+
+// Up and down buttons a page apart, with the position between them. Hands and the
+// mouse have no stick, so this is the way to scroll for them.
+function drawBookmarkScrollStrip(ctx, x, y, height) {
+  const buttons = [
+    { direction: -1, top: y, enabled: bookmarkScrollRow > 0 },
+    { direction: 1, top: y + height - SCROLL_STRIP_W, enabled: bookmarkScrollRow < bookmarkMaxScrollRow }
+  ];
+  for (const { direction, top, enabled } of buttons) {
+    const hovered = enabled && hoverIndex === hitRects.length;
+    ctx.fillStyle = hovered ? COLOR_CELL_HOVER : COLOR_CELL;
+    drawRoundedRect(ctx, x, top, SCROLL_STRIP_W, SCROLL_STRIP_W, 12);
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = COLOR_CELL_BORDER;
+    ctx.stroke();
+    const cx = x + SCROLL_STRIP_W / 2;
+    const cy = top + SCROLL_STRIP_W / 2;
+    ctx.beginPath();
+    ctx.moveTo(cx - 13, cy - 6 * direction);
+    ctx.lineTo(cx, cy + 7 * direction);
+    ctx.lineTo(cx + 13, cy - 6 * direction);
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = enabled ? COLOR_TEXT : COLOR_MUTED;
+    ctx.stroke();
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "miter";
+    ctx.lineWidth = 2;
+    if (enabled) {
+      hitRects.push({
+        x, y: top, w: SCROLL_STRIP_W, h: SCROLL_STRIP_W,
+        action: { type: "bookmarkScroll", direction }
+      });
+    }
+  }
+  const trackTop = y + SCROLL_STRIP_W + CELL_GAP;
+  const trackH = height - (SCROLL_STRIP_W + CELL_GAP) * 2;
+  const thumbH = Math.max(24, trackH * bookmarkScrollPage / (bookmarkMaxScrollRow + bookmarkScrollPage));
+  const thumbY = trackTop + (trackH - thumbH) * (bookmarkScrollRow / bookmarkMaxScrollRow);
+  ctx.fillStyle = COLOR_MUTED;
+  drawRoundedRect(ctx, x + SCROLL_STRIP_W / 2 - 3, thumbY, 6, thumbH, 3);
+  ctx.fill();
+}
+
+function scrollBookmarks(rows) {
+  const next = Math.min(bookmarkMaxScrollRow, Math.max(0, bookmarkScrollRow + rows));
+  if (next !== bookmarkScrollRow) {
+    bookmarkScrollRow = next;
+    drawPanel();
+  }
+}
+
+// A stick moves the list a row at a time. True while the list is what the stick
+// is for, so a held stick does not also change the tunnel speed behind the menu.
+function scrollPanelWithStick(axis) {
+  if (!panelVisible || panelMode !== "main" || keyboardOpen || submitForm || bookmarkMaxScrollRow === 0
+    || shouldShowStartFavoritesOnPanel()) {
+    return false;
+  }
+  if (Math.abs(axis) >= STICK_SCROLL_THRESHOLD && now() >= nextStickScrollMs) {
+    nextStickScrollMs = now() + STICK_SCROLL_REPEAT_MS;
+    scrollBookmarks(Math.sign(axis));
+  }
+  return true;
+}
+
+function shouldShowStartFavoritesOnPanel() {
+  return !modeChosenExplicitly && shouldShowStartFavorites();
 }
 
 // Render the help UI in logical menu coordinates onto its larger backing
@@ -1738,6 +1909,77 @@ function drawKeyboardRegion(ctx) {
   for (const rect of keyRects) {
     hitRects.push(rect);
   }
+}
+
+function drawSubmitField(ctx, x, y, w, field, label) {
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = COLOR_MUTED;
+  ctx.font = "400 24px 'Segoe UI', sans-serif";
+  ctx.fillText(label, x, y + SUBMIT_LABEL_H / 2);
+
+  const boxY = y + SUBMIT_LABEL_H;
+  const hovered = hoverIndex === hitRects.length;
+  ctx.fillStyle = hovered ? COLOR_CELL_HOVER : COLOR_CELL;
+  drawRoundedRect(ctx, x, boxY, w, SUBMIT_FIELD_H, 12);
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = COLOR_CELL_BORDER;
+  ctx.stroke();
+
+  const value = submitForm[field];
+  ctx.fillStyle = value ? COLOR_TEXT : COLOR_MUTED;
+  ctx.font = "500 28px 'Segoe UI', sans-serif";
+  ctx.fillText(middleEllipsizeCanvasText(ctx, value || t("submit.empty"), w - 40), x + 20, boxY + SUBMIT_FIELD_H / 2);
+  hitRects.push({ x, y: boxY, w, h: SUBMIT_FIELD_H, action: { type: "submitEdit", field } });
+}
+
+function drawSubmitButton(ctx, x, y, w, label, action) {
+  const enabled = Boolean(action);
+  const hovered = enabled && hoverIndex === hitRects.length;
+  ctx.fillStyle = hovered ? COLOR_CELL_HOVER : COLOR_CELL;
+  drawRoundedRect(ctx, x, y, w, BACK_BAR_H, 16);
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = COLOR_CELL_BORDER;
+  ctx.stroke();
+  ctx.fillStyle = enabled ? COLOR_TEXT : COLOR_MUTED;
+  ctx.font = "700 30px 'Segoe UI', sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, x + w / 2, y + BACK_BAR_H / 2);
+  if (enabled) {
+    hitRects.push({ x, y, w, h: BACK_BAR_H, action });
+  }
+}
+
+function drawSubmitRegion(ctx) {
+  const x = PAD;
+  const w = CANVAS_WIDTH - PAD * 2;
+  const top = contentTop() + MODE_BAR_H + 24;
+  const rowH = SUBMIT_LABEL_H + SUBMIT_FIELD_H + SUBMIT_ROW_GAP;
+  drawSubmitField(ctx, x, top, w, "query", t("submit.query"));
+  drawSubmitField(ctx, x, top + rowH, w, "name", t("submit.name"));
+
+  const { status, query } = submitForm;
+  const buttonY = CANVAS_HEIGHT - PAD - BACK_BAR_H;
+  if (status && status !== "sending") {
+    ctx.fillStyle = COLOR_TEXT;
+    ctx.font = "500 28px 'Segoe UI', sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(t(`submit.result.${status}`), CANVAS_WIDTH / 2, (top + rowH * 2 + buttonY) / 2);
+  }
+
+  const sent = status === "sent";
+  const buttonW = (w - BOTTOM_GAP) / 2;
+  drawSubmitButton(ctx, x, buttonY, buttonW, t(sent ? "submit.close" : "submit.cancel"), { type: "submitCancel" });
+  if (!sent) {
+    const canSend = query && status !== "sending";
+    drawSubmitButton(ctx, x + buttonW + BOTTOM_GAP, buttonY, buttonW, t("submit.send"), canSend ? { type: "submitSend" } : null);
+  }
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
 }
 
 // Draw the transcript-confirmation view: heading, the understood text large and
@@ -2245,19 +2487,23 @@ function drawPointerDot(ctx) {
 
 // Placement: anchor in front of the active camera's yaw at open time.
 
-function anchorPanel() {
+function anchorPanel(idleYaw = null) {
   const surface = activePanelSurface();
   const cam = getActiveCamera();
   const camPos = new THREE.Vector3();
   const camDir = new THREE.Vector3();
   cam.getWorldPosition(camPos);
-  cam.getWorldDirection(camDir);
-  // Flatten forward onto the horizontal plane so the panel stands upright.
-  camDir.y = 0;
-  if (camDir.lengthSq() < 1e-6) {
-    camDir.set(0, 0, -1);
+  if (idleYaw === null) {
+    cam.getWorldDirection(camDir);
+    // Flatten forward onto the horizontal plane so the panel stands upright.
+    camDir.y = 0;
+    if (camDir.lengthSq() < 1e-6) {
+      camDir.set(0, 0, -1);
+    }
+    camDir.normalize();
+  } else {
+    camDir.set(-Math.sin(idleYaw), 0, -Math.cos(idleYaw));
   }
-  camDir.normalize();
 
   surface.mesh.position
     .copy(camPos)
@@ -2283,7 +2529,8 @@ function followPanelAnchorToViewer() {
 }
 
 function stabilizePanelAnchor() {
-  if (!panelVisible || !activePanelSurface().mesh || panelAnchorStabilizeUntil <= 0) {
+  // The idle launcher has its own per-frame anchor (updateIdlePanelAnchor).
+  if (!panelVisible || panelMode === "idle" || !activePanelSurface().mesh || panelAnchorStabilizeUntil <= 0) {
     return;
   }
   if (now() > panelAnchorStabilizeUntil) {
@@ -2315,7 +2562,7 @@ function ensureExitOverlay() {
   exitTexture = new THREE.CanvasTexture(exitCanvas);
   exitTexture.colorSpace = THREE.SRGBColorSpace;
   // Flat head-on UI quad, ~700 texels/m against ~590 screen px/m; see
-  // createPanelSurface(). It redraws every frame of the exit hold, so skipping mip
+  // createPanelSurface(). It redraws through the exit hold, so skipping mip
   // regeneration matters.
   exitTexture.generateMipmaps = false;
   exitTexture.minFilter = THREE.LinearFilter;
@@ -2388,6 +2635,8 @@ function drawExitOverlay(progress, hintOnly = false) {
   ctx.font = "500 24px 'Segoe UI', sans-serif";
   ctx.fillText(t("vr.exitOverlay.hold"), cx, cy + 44);
   exitTexture.needsUpdate = true;
+  // Upload now, between frames, rather than mid-render when the mesh is drawn.
+  renderer.initTexture(exitTexture);
 }
 
 function setExitHoldProgress(progress) {
@@ -2398,8 +2647,10 @@ function setExitHoldProgress(progress) {
   }
   anchorExitOverlay();
   exitMesh.visible = progress > 0;
-  if (progress > 0) {
+  const step = Math.round(progress * PANEL_EXIT_PROGRESS_STEPS);
+  if (progress > 0 && step !== exitOverlayDrawnStep) {
     drawExitOverlay(progress, false);
+    exitOverlayDrawnStep = step;
   }
 }
 
@@ -2411,6 +2662,7 @@ function flashExitHoldHint() {
   anchorExitOverlay();
   exitMesh.visible = true;
   drawExitOverlay(0, true);
+  exitOverlayDrawnStep = -1;
   exitHoldHideTimer = setTimeout(() => {
     exitHoldHideTimer = null;
     if (exitMesh) {
@@ -3134,10 +3386,25 @@ function showIdlePanel() {
   panelVisible = true;
   panelMesh.visible = true;
   helpMesh.visible = false;
-  anchorPanel();
-  panelAnchorStabilizeUntil = now() + PANEL_ANCHOR_STABILIZE_MS;
+  // First frame: straight to its place, with no glide in from the last position.
+  const gazeYaw = currentGazeYaw();
+  idleAnchorYaw = idleAnchorTargetYaw(gazeYaw, gazeYaw ?? 0);
+  idleAnchorLastMs = now();
+  anchorPanel(idleAnchorYaw);
   setPanelCursor(null, -1);
   drawPanel();
+}
+
+function currentGazeYaw() {
+  getActiveCamera().getWorldDirection(_idleGazeDir);
+  return gazeYawFromForward(_idleGazeDir.x, _idleGazeDir.y, _idleGazeDir.z);
+}
+
+function updateIdlePanelAnchor() {
+  const nowMs = now();
+  idleAnchorYaw = stepIdleAnchorYaw(currentGazeYaw(), idleAnchorYaw, (nowMs - idleAnchorLastMs) / 1000);
+  idleAnchorLastMs = nowMs;
+  anchorPanel(idleAnchorYaw);
 }
 
 // True when the idle launcher should currently be up: only in an active XR
@@ -3159,6 +3426,8 @@ function updateVrIdlePanel() {
     showIdlePanel();
   } else if (!want && isIdlePanelVisible()) {
     hidePanel();
+  } else if (want) {
+    updateIdlePanelAnchor();
   }
 }
 
@@ -3293,6 +3562,7 @@ function hidePanel() {
   modeChosenExplicitly = false;
   // Close the keyboard so it doesn't reopen mid-composition next time.
   closeKeyboard();
+  submitForm = null;
   if (panelMesh) {
     panelMesh.visible = false;
   }
@@ -3469,6 +3739,7 @@ export {
   flashExitHoldHint,
   hideExitHoldIndicator,
   followPanelAnchorToViewer,
+  scrollPanelWithStick,
   refreshPanelAnimation,
   updatePanelXrInput,
   registerRayTargets,

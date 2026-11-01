@@ -4,7 +4,8 @@
 // Shown in the settings panel as written; add a model here, not in the UI.
 export const RECOMMENDED_STEPS = Object.freeze([
   { name: "FLUX.2 Klein", match: /flux[._ -]?2.*klein/i, steps: 4 },
-  { name: "Moss", match: /moss/i, steps: 30 }
+  { name: "Moss", match: /moss/i, steps: 30 },
+  { name: "Krea 2 Turbo", match: /krea[._ -]?2.*turbo/i, steps: 8 }
 ]);
 
 // Edit models take "make it icy" against the source image; the rest repaint it

@@ -304,7 +304,7 @@ button.secondary {
 .bookmark-menu-item {
   width: 100%;
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
+  grid-template-columns: 76px minmax(0, 1fr);
   gap: 8px;
   align-items: center;
   border: 0;
@@ -1490,4 +1490,23 @@ details.settings-section:not([open]) {
 
 .settings-warning {
   color: #f2b86b;
+}
+
+.submit-field {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.submit-field input,
+.submit-field select {
+  width: 100%;
+}
+
+.submit-message {
+  margin: 0;
+  min-height: 1.3em;
+  color: var(--muted);
+  font-size: 0.85rem;
 }

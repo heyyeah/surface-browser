@@ -1,6 +1,8 @@
 // API extraction and flat-mode result rendering.
 
 import { state } from "./state.js";
+import { renderer } from "./scene.js";
+import { logXrEvent } from "./xr-diag.js";
 import { DEBUG_UI } from "./config.js";
 import { AppState, GENAI_MIN_TUNNEL_DISPLAY_MS } from "./constants.js";
 import { urlInput, fallbackInput, extractLabel, resultsPanel, historyLabel } from "./dom.js";
@@ -669,6 +671,10 @@ async function loadAndExtractUrl({
   setAddressFeedback(null);
   setStatus(t(cycleReload ? "status.reloading" : "status.extracting"));
   extractLabel.textContent = "";
+  // Into the tunnel now, as GenAI does: rendering a JS page can take many seconds.
+  if (resetTunnel) {
+    prepareForTunnelRun();
+  }
 
   try {
     const fallbackMode = fallbackInput.checked ? "auto" : "none";
@@ -694,7 +700,7 @@ async function loadAndExtractUrl({
       payload,
       mode: "url",
       resolvedQuery,
-      resetTunnel,
+      resetTunnel: false,
       recordHistory,
       requestGeneration: request.generation
     });
@@ -867,6 +873,9 @@ async function loadImageSearch({
   setAddressFeedback(null);
   setStatus(t("status.searching"));
   extractLabel.textContent = "";
+  if (resetTunnel) {
+    prepareForTunnelRun();
+  }
 
   try {
     const response = await fetch(`/api/search/images?q=${encodeURIComponent(resolvedQuery)}&limit=15`, {
@@ -885,7 +894,7 @@ async function loadImageSearch({
       payload,
       mode: "image_search",
       resolvedQuery,
-      resetTunnel,
+      resetTunnel: false,
       recordHistory,
       requestGeneration: request.generation,
       emptyStatusKey: "status.noSearchResults"
@@ -943,6 +952,11 @@ function pendingDestination() {
   if (state.cycleRequestInFlight) {
     return activeLoadRequest.target;
   }
+  // The tunnel was entered for a load that failed: the viewer is on neither page,
+  // so Back returns to the one they left rather than the one before it.
+  if (state.menuLoad?.failed && state.extractedItems.length === 0) {
+    return state.menuLoad;
+  }
   if (state.genAiLaunch) {
     return { mode: "genai", query: null };
   }
@@ -964,18 +978,62 @@ function backTarget() {
   });
 }
 
+// In VR, with no history left, Back goes to the start tiles. A page reload (the
+// flat toolbar's way) would end the session, so the scene is reset in place.
+function canReturnToVrStart() {
+  return renderer.xr.isPresenting && Boolean(
+    state.cycleRequestInFlight
+    || state.currentQuery
+    || state.extractedItems.length > 0
+    || (urlInput.value || "").trim()
+  );
+}
+
+function returnToVrStart() {
+  cancelActiveLoadRequest();
+  activeLoadRequest.generation += 1;
+  activeLoadRequest.target = null;
+  state.cycleRequestInFlight = false;
+  prepareForTunnelRun();
+  resetGenAiRequestLabels(state);
+  state.autoGalleryMode = false;
+  state.menuLoad = null;
+  state.pageTitle = null;
+  state.currentLoadMode = "url";
+  state.currentQuery = "";
+  state.lastSuccessfulQuery = "";
+  state.lastSuccessfulRequest = null;
+  state.navigationHistory.length = 0;
+  urlInput.value = "";
+  resultsPanel.textContent = "";
+  setAddressFeedback(null);
+  setStatus("");
+}
+
 function canGoBack() {
-  return Boolean(backTarget().entry);
+  return Boolean(backTarget().entry) || canReturnToVrStart();
 }
 
 // Back works mid-load too: starting the previous request cancels the running
 // one (beginLoadRequest), including its GenAI job on the server.
 async function goBack() {
   const { entry: previous, pop } = backTarget();
+  logXrEvent({
+    event: "back",
+    to: previous ? previous.mode : (canReturnToVrStart() ? "start" : "none"),
+    pop,
+    depth: state.navigationHistory.length,
+    inFlight: state.cycleRequestInFlight,
+    appState: state.appState
+  });
   if (pop) {
     state.navigationHistory.pop();
   }
   if (!previous) {
+    if (canReturnToVrStart()) {
+      returnToVrStart();
+      return true;
+    }
     setStatus(t("status.noHistory"));
     return false;
   }

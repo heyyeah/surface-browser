@@ -153,6 +153,11 @@ function startXrDiagnostics() {
   renderer.xr.addEventListener("sessionstart", () => {
     lastSignature = "";
     const session = renderer.xr.getSession();
+    // Fires on a Meta-button recenter, if the runtime reports it at all.
+    renderer.xr.getReferenceSpace()?.addEventListener?.("reset", (event) => {
+      const p = event.transform?.position;
+      post({ event: "reference-space-reset", position: p ? [p.x, p.y, p.z] : null });
+    });
     post({
       event: "sessionstart",
       sessionAttempt,

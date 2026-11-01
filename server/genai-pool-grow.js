@@ -142,6 +142,45 @@ export function addGrownMember(store, { key, entry, member, buffer, contentType 
   };
 }
 
+// Permanently remove members, by id, from every key that holds them. Never
+// throws: `{ store, removed, error }` leaves the store unchanged on error.
+//
+// The manifest goes first, so a crash can orphan a file but never leave an entry
+// pointing at a missing one.
+export function removeGrownMembers(store, ids) {
+  if (!store?.active) {
+    return { store, removed: 0, error: store?.error || "grown store is off" };
+  }
+  const doomed = new Set(ids);
+  const keys = {};
+  let removed = 0;
+  for (const [key, entry] of Object.entries(store.manifest.keys)) {
+    const members = (entry?.members || []).filter((member) => !doomed.has(String(member.sha256 || member.file)));
+    removed += (entry?.members || []).length - members.length;
+    if (members.length) {
+      keys[key] = { ...entry, members };
+    }
+  }
+  if (!removed) {
+    return { store, removed: 0 };
+  }
+  const files = [...doomed].map((id) => store.byId.get(id)?.path).filter(Boolean);
+  const manifest = { ...store.manifest, updatedAt: new Date().toISOString(), keys };
+  try {
+    writeAtomically(path.join(store.dir, "manifest.json"), `${JSON.stringify(manifest)}\n`);
+  } catch (err) {
+    return { store, removed: 0, error: err.message };
+  }
+  for (const file of files) {
+    try {
+      fs.rmSync(file, { force: true });
+    } catch (err) {
+      console.warn(`GenAI pool growth: could not remove ${file}: ${err.message}`);
+    }
+  }
+  return { store: loadGrowStore(store.dir), removed };
+}
+
 function writeAtomically(file, data) {
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   try {

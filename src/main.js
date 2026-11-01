@@ -84,6 +84,8 @@ import {
   isDesktopSpherePointer,
   recordShiftDragEvent,
   endShiftDragIfShiftReleased,
+  recordAltRollEvent,
+  isAltRollActive,
   applyShiftDragInput,
   recordDesktopPointerEvent,
   applyDesktopPointerSphereInput,
@@ -121,6 +123,7 @@ import { createOnboardingState, stepOnboarding, onboardingRowKeys } from "./onbo
 import { setupHandPresence, setupControllerPresence } from "./hands.js";
 import { setWristPanelHand, updateWristLauncher } from "./wristui.js";
 import { updateControllerCallouts } from "./controller-callouts.js";
+import { setSubmissionsEnabled } from "./submissions.js";
 import {
   beginPassthroughSession,
   endPassthroughSession,
@@ -622,7 +625,8 @@ function renderShortcutsMenu() {
       [t("key.tap"), t("act.travel")],
       [t("key.drag"), t("act.turn")],
       [t("key.dragRelease"), t("act.throw")],
-      [t("key.pinch"), t("act.zoom")]
+      [t("key.pinch"), t("act.zoom")],
+      [t("key.twoFingerTwist"), t("act.twist")]
     ]
     : [
       // Plain verb: the pause clause belongs to the drag, and Space is below.
@@ -630,6 +634,7 @@ function renderShortcutsMenu() {
       [t("key.shiftArrows"), t("act.zoom")],
       [t("key.clickDrag"), t("act.turn")],
       [t("key.clickThrow"), t("act.throw")],
+      [t("key.altDrag"), t("act.twist")],
       [t("key.clickEnter"), t("act.travelSelected")],
       [t("key.space"), t("act.pauseRotation")]
     ];
@@ -1179,6 +1184,7 @@ async function configureApiCapabilities(preloaded = null) {
     }
     updateModeToggleUi();
     state.genAiActionsEnabled = genAiEnabled;
+    setSubmissionsEnabled(capabilities.submissions?.enabled === true);
     setGenAiBookmarksEnabled(genAiEnabled);
     setVrPanelGenAiEnabled(genAiEnabled);
     setVrPanelSttEnabled(Boolean(capabilities.stt?.enabled));
@@ -1443,6 +1449,27 @@ canvas.addEventListener("pointercancel", (event) => recordShiftDragEvent(event, 
 window.addEventListener("keyup", endShiftDragIfShiftReleased);
 window.addEventListener("blur", () => endShiftDragIfShiftReleased({ shiftKey: false }));
 
+// --- Alt/Option + drag: roll (input.js) ---------------------------------------
+canvas.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0 || !event.altKey || event.shiftKey || !isDesktopSpherePointer(event)) {
+    return;
+  }
+  if (!recordAltRollEvent(event, "down")) {
+    return;
+  }
+  if (canvas.setPointerCapture) {
+    try {
+      canvas.setPointerCapture(event.pointerId);
+    } catch {
+      // A pointer that ended between the event and this call.
+    }
+  }
+  event.preventDefault();
+});
+canvas.addEventListener("pointermove", (event) => recordAltRollEvent(event, "move"));
+canvas.addEventListener("pointerup", (event) => recordAltRollEvent(event, "up"));
+canvas.addEventListener("pointercancel", (event) => recordAltRollEvent(event, "cancel"));
+
 // --- The desktop pointer path ------------------------------------------------
 //
 // The mouse twin of the touch listeners below: they only record, and every
@@ -1453,7 +1480,7 @@ window.addEventListener("blur", () => endShiftDragIfShiftReleased({ shiftKey: fa
 // Shift is excluded: shift+drag is handled separately and must not also start
 // this drag. Not named handleDesktopPointer(), which is the DEV bridge above.
 function recordDesktopSpherePointer(event, type) {
-  if (!isDesktopSpherePointer(event) || event.shiftKey) {
+  if (!isDesktopSpherePointer(event) || event.shiftKey || isAltRollActive()) {
     return;
   }
   recordDesktopPointerEvent(event, type);
@@ -1464,6 +1491,7 @@ canvas.addEventListener("pointerdown", (event) => {
     event.button !== 0
     || !isDesktopSpherePointer(event)
     || event.shiftKey
+    || event.altKey
     || renderer.xr.isPresenting
     || state.appState !== AppState.INSIDE_SPHERE
     || isPanelVisible()

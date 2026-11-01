@@ -10,7 +10,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 
 import { genAiBookmarkPrompts } from "../shared/bookmark-presets.js";
-import { addGrownMember, bookmarkPromptSet, loadGrowStore, poolGrowthRound } from "../server/genai-pool-grow.js";
+import { addGrownMember, bookmarkPromptSet, loadGrowStore, poolGrowthRound, removeGrownMembers } from "../server/genai-pool-grow.js";
 import { applyPoolSuppression, mergePools } from "../server/genai-pool-pack.js";
 
 const bookmarkPrompts = bookmarkPromptSet(genAiBookmarkPrompts());
@@ -126,4 +126,28 @@ test("a union draws from both stores, and bytes in both count once, as baked", (
   assert.equal(merged.keys.get("k2").length, 1);
   assert.equal(merged.dir, "/pack");
   assert.equal(mergePools(baked, { active: false }), baked, "no grown store is the pack unchanged");
+});
+
+test("removeGrownMembers deletes the file and manifest entry, in every key, and drops an emptied key", () => {
+  const dir = tempDir();
+  let store = loadGrowStore(dir);
+  const add = (key, buffer) => {
+    const sha256 = address(buffer);
+    ({ store } = addGrownMember(store, { key, entry: { kind: "base", prompt: "p" }, member: { sha256 }, buffer, contentType: "image/png" }));
+    return sha256;
+  };
+  const shared = add("a", Buffer.from("shared"));
+  add("b", Buffer.from("shared"));
+  const kept = add("b", Buffer.from("kept"));
+
+  assert.equal(removeGrownMembers(store, ["not-a-member"]).removed, 0);
+  const result = removeGrownMembers(store, [shared]);
+  assert.equal(result.removed, 2);
+  assert.equal(result.error, undefined);
+  assert.equal(fs.existsSync(path.join(dir, `images/${shared}.png`)), false);
+  assert.equal(fs.existsSync(path.join(dir, `images/${kept}.png`)), true);
+  const reloaded = loadGrowStore(dir);
+  assert.deepEqual([...reloaded.entries.keys()], ["b"]);
+  assert.deepEqual(reloaded.entries.get("b").members.map((m) => m.id), [kept]);
+  assert.equal(result.store.memberCount, 1);
 });

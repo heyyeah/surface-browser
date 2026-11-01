@@ -462,6 +462,8 @@ test("the review page lists grown members with a date the range filter uses, and
       body: JSON.stringify({ ids: [hidden], suppressed: true })
     });
     assert.equal((await suppress.json()).changed, 1);
+    assert.equal(fs.existsSync(path.join(growDir, members[0].file)), false, "the file is gone");
+    assert.equal((await fetch(`${server.base}/api/pool/image/${hidden}?w=64`)).status, 404, "so is the thumbnail");
     for (let round = 0; round < 4; round += 1) {
       const { json: batch } = await postGenAi(server, { prompt: BOOKMARK, count: 2 });
       for (const item of batch.items) {
@@ -472,14 +474,32 @@ test("the review page lists grown members with a date the range filter uses, and
 
   await withGrowServer({ growDir, env: { ...ALL_FROM_POOL, GENAI_POOL_SUPPRESS_FILE: suppressFile } }, async ({ server }) => {
     const json = await (await fetch(`${server.base}/api/pool/members`)).json();
-    const member = json.keys.flatMap((key) => key.members).find((m) => m.id === hidden);
-    assert.equal(member.suppressed, true, "the deletion survived a restart");
+    assert.equal(json.keys.flatMap((key) => key.members).some((m) => m.id === hidden), false, "the deletion survived a restart");
     for (let round = 0; round < 4; round += 1) {
       const { json: batch } = await postGenAi(server, { prompt: BOOKMARK, count: 2 });
       for (const item of batch.items) {
         assert.notEqual(await addressOf(server, item), hidden);
       }
     }
+  });
+});
+
+test("a grown member hidden by the old tombstone-only delete is purged at boot", async () => {
+  const growDir = tempDir("grow");
+  const suppressFile = path.join(tempDir("grow-suppress"), "suppressed.json");
+  let doomed;
+  await withGrowServer({ growDir, env: { ...ALL_FROM_POOL, GENAI_POOL_SUPPRESS_FILE: suppressFile } }, async ({ server }) => {
+    await postGenAi(server, { prompt: BOOKMARK, count: 2 });
+    const json = await (await fetch(`${server.base}/api/pool/members`)).json();
+    doomed = json.keys.flatMap((key) => key.members)[0];
+  });
+  fs.writeFileSync(suppressFile, JSON.stringify({ version: 1, suppressed: { [doomed.id]: { at: "", file: doomed.file, reason: "" } } }));
+  await withGrowServer({ growDir, env: { ...ALL_FROM_POOL, GENAI_POOL_SUPPRESS_FILE: suppressFile } }, async ({ server }) => {
+    const json = await (await fetch(`${server.base}/api/pool/members`)).json();
+    assert.equal(json.keys.flatMap((key) => key.members).some((m) => m.id === doomed.id), false);
+    assert.equal(json.pack.suppressedCount, 0);
+    assert.equal(fs.existsSync(path.join(growDir, doomed.file)), false);
+    assert.deepEqual(JSON.parse(fs.readFileSync(suppressFile, "utf8")).suppressed, {});
   });
 });
 

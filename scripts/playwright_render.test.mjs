@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
 import { EventEmitter } from "node:events";
-import { Agent as UndiciAgent } from "undici";
+import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import {
   CHROMIUM_LAUNCH_OPTIONS,
   CONTEXT_LOCKDOWN_OPTIONS,
@@ -220,7 +220,7 @@ function pinnedUpstream(calls) {
       if (new URL(next).hostname === "blocked.test") {
         throw new PolicyError(`blocked: ${next}`);
       }
-      const response = await fetch(next, {
+      const response = await undiciFetch(next, {
         method, body, redirect: "manual", dispatcher,
         headers: { ...headers, "x-via-node": "1" }
       });

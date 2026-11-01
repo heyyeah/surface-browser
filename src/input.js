@@ -51,6 +51,7 @@ import {
   applySphereRotationDelta,
   applySpherePointerRotation,
   applySphereGrabRotation,
+  applySphereRollRotation,
   activateSelectedSphereLink,
   activateSelectedSphereImageForGenAi
 } from "./sphere.js";
@@ -79,6 +80,7 @@ import {
   togglePanel,
   toggleHelpPanel,
   isPanelVisible,
+  scrollPanelWithStick,
   setExitHoldProgress,
   flashExitHoldHint,
   hideExitHoldIndicator
@@ -97,7 +99,8 @@ import {
 import {
   createTouchGestureState,
   applyTouchPointerEvent,
-  stepTouchGestures
+  stepTouchGestures,
+  TOUCH_TWIST_THROW_RAD_PER_S
 } from "./touch-gestures.js";
 import {
   createShiftDragState,
@@ -127,6 +130,7 @@ import {
 //   [0] trigger  [1] squeeze/grip  [3] thumbstick press
 //   [4] primary face (X on left, A on right)
 //   [5] secondary face (Y on left, B on right)
+//   [12] left Menu on Quest Touch Plus (seen in the device log; its profile says 7)
 //
 // Bindings (also listed in the in-headset help panel):
 //   Right trigger / pinch  Select
@@ -134,8 +138,8 @@ import {
 //   Right B                Hold to exit VR
 //   Right stick press      Jump to sphere (tunnel only)
 //   Right grip             Pause/resume sphere rotation (sphere only)
-//   Left  X                Toggle help
-//   Left  Y                Toggle menu panel
+//   Left  X / Menu         Toggle menu panel
+//   Left  Y                Capture, or help when capture is off
 //   Left  stick press      History back
 //   Left  grip             Modifier only: held + right trigger = GenAI variations
 //
@@ -300,6 +304,7 @@ function applyMicrogesture(hand, gesture, dt, directGestureActive) {
         decision.direction,
         MICROGESTURE_TUNNEL_SPEED_STEP
       );
+      state.tunnelSpeedEasing = false;
       speedInput.value = String(state.cameraSpeed.toFixed(1));
       break;
 
@@ -577,6 +582,7 @@ function applyHandDistanceGesture(decision) {
 
   const speedTravel = decision.deltaM * HAND_TUNNEL_SPEED_UNITS_PER_METER;
   state.cameraSpeed = clamp(twoHandGestureState.baselineSpeed + speedTravel, 4, 45);
+  state.tunnelSpeedEasing = false;
   // Same anti-windup as the zoom branch, against the 4..45 clamp.
   twoHandGestureState.baselineSpeed = reanchorBaselineAfterClamp(
     twoHandGestureState.baselineSpeed,
@@ -752,7 +758,7 @@ function applyXrControllerInput(dt) {
   let leftTriggerPressed = false;
   let rightTriggerPressed = false;
   // Button map, collected per hand.
-  let leftXPressed = false;         // left [4] — toggle the menu panel.
+  let leftXPressed = false;         // left [4] or [12] — toggle the menu panel.
   let leftYPressed = false;         // left [5] — Capture, or Help without a token.
   let leftGripPressed = false;      // left [1] — GenAI chord modifier only.
   let leftStickPressed = false;     // left [3] — history back.
@@ -871,7 +877,7 @@ function applyXrControllerInput(dt) {
     anySelectPressed = anySelectPressed || selectPressed;
     if (source.handedness === "left") {
       leftTriggerPressed = leftTriggerPressed || selectPressed;
-      leftXPressed = leftXPressed || Boolean(buttons[4]?.pressed);
+      leftXPressed = leftXPressed || Boolean(buttons[4]?.pressed) || Boolean(buttons[12]?.pressed);
       leftYPressed = leftYPressed || Boolean(buttons[5]?.pressed);
       leftGripPressed = leftGripPressed || Boolean(buttons[1]?.pressed);
       leftStickPressed = leftStickPressed || Boolean(buttons[3]?.pressed);
@@ -887,11 +893,25 @@ function applyXrControllerInput(dt) {
     }
     const horizontalAxis = source.gamepad.axes[2] ?? source.gamepad.axes[0] ?? 0;
     const verticalAxis = source.gamepad.axes[3] ?? source.gamepad.axes[1] ?? 0;
+    if (scrollPanelWithStick(verticalAxis)) {
+      continue;
+    }
     if (state.appState === AppState.INSIDE_SPHERE) {
       if (source.handedness === "left") {
         if (Math.abs(verticalAxis) >= 0.12) {
           markSphereInteraction();
           applySphereZoomDelta(-verticalAxis * CONTROLLER_SPHERE_ZOOM_SPEED * dt);
+        }
+        // Left/right rolls about the gaze axis, through the same speed channel as
+        // the right stick, so it coasts like the other two axes. Right = clockwise.
+        if (Math.abs(horizontalAxis) >= 0.12) {
+          markSphereInteraction();
+          state.sphereRotationInputActive = true;
+          state.sphereZRotSpeed = applySphereRotationDelta(
+            state.sphereZRotSpeed,
+            horizontalAxis * SPHERE_ROTATION_ACCEL * sphereRotationAccelScale() * dt,
+            dt
+          );
         }
         continue;
       }
@@ -910,6 +930,8 @@ function applyXrControllerInput(dt) {
     }
     if (Math.abs(verticalAxis) >= 0.12) {
       state.cameraSpeed = clamp(state.cameraSpeed + (-verticalAxis * 20 * dt), 4, 45);
+      // A held stick would otherwise balance against the ease back to default.
+      state.tunnelSpeedEasing = false;
       speedInput.value = String(state.cameraSpeed.toFixed(1));
       break;
     }
@@ -1311,7 +1333,7 @@ function applyXrControllerInput(dt) {
     state.xrCaptureLatch = false;
   }
 
-  // Toggle the main menu panel: left X.
+  // Toggle the main menu panel: left X or Menu.
   if (leftXPressed && !state.xrPanelToggleLatch) {
     state.xrPanelToggleLatch = true;
     togglePanel();
@@ -1605,6 +1627,19 @@ function applyTouchGestureDecision(decision, dt, { chordRing = true } = {}) {
 
   applyHandDistanceGesture(decision.distance);
 
+  const twist = decision.twist;
+  if (twist?.active) {
+    markSphereInteraction();
+    state.sphereInteractionHold = true;
+    state.sphereZRotSpeed = 0;
+    applySphereRollRotation(twist.deltaRad);
+  } else if (twist?.releaseSpinRadPerS) {
+    state.sphereZRotSpeed = twist.releaseSpinRadPerS;
+    state.sphereCoastTauS = SPHERE_COAST_TAU_HAND_THROW_S;
+    state.sphereRotationInputActive = true;
+    holdSphereDriftResume();
+  }
+
   // The release handoff, written after the drag as the hand path does: the
   // smoother above chases a target of zero and would eat the flick.
   if (rotate.justReleased && rotate.releaseSpin) {
@@ -1684,8 +1719,10 @@ function setupTrackpadPinch() {
     return;
   }
   let lastGestureScale = 1;
+  let lastGestureRotation = 0;
   canvas.addEventListener("gesturestart", (event) => {
     lastGestureScale = 1;
+    lastGestureRotation = 0;
     event.preventDefault();
   });
   canvas.addEventListener("gesturechange", (event) => {
@@ -1696,6 +1733,13 @@ function setupTrackpadPinch() {
     }
     const deltaY = -100 * Math.log(scale / lastGestureScale);
     lastGestureScale = scale;
+    // Safari also reports the trackpad's two-finger rotate, clockwise positive.
+    const rotation = Number(event.rotation) || 0;
+    if (!isPanelVisible() && rotation !== lastGestureRotation) {
+      applySphereRollRotation((rotation - lastGestureRotation) * Math.PI / 180);
+      state.sphereZRotSpeed = 0;
+    }
+    lastGestureRotation = rotation;
     trackpadPinchState = applyTrackpadWheelEvent(trackpadPinchState, {
       deltaY,
       ctrlKey: true,
@@ -1813,6 +1857,85 @@ function applyDesktopPointerSphereInput(dt) {
   desktopPointerGestureState = stepped.state;
   setDesktopDragCursor(stepped.decision.rotate.active);
   applyTouchGestureDecision(stepped.decision, dt, { chordRing: false });
+}
+
+// --- Alt/Option + drag: roll -------------------------------------------------
+//
+// The desktop twin of the two-finger twist: dragging around the canvas centre
+// turns the sphere about the gaze axis, as turning a picture by its corner
+// would. Chrome never hands a page the trackpad rotate gesture, so this is the
+// path every desktop browser has. A release faster than the touch throw keeps
+// spinning.
+const ALT_ROLL_CENTRE_DEADZONE_PX = 24;
+const ALT_ROLL_THROW_WINDOW_MS = 80;
+let altRollStroke = null;
+
+function altRollAngle(event, rect) {
+  const x = event.clientX - rect.left - rect.width / 2;
+  const y = event.clientY - rect.top - rect.height / 2;
+  return { angle: Math.atan2(y, x), radius: Math.hypot(x, y) };
+}
+
+function wrapRollAngle(rad) {
+  return rad - 2 * Math.PI * Math.round(rad / (2 * Math.PI));
+}
+
+function isAltRollActive() {
+  return Boolean(altRollStroke);
+}
+
+// Returns true when the event was taken, so the caller can preventDefault().
+function recordAltRollEvent(event, type) {
+  const now = performance.now();
+  const rect = canvas.getBoundingClientRect();
+  if (type === "down") {
+    if (
+      !event.altKey
+      || renderer.xr.isPresenting
+      || state.appState !== AppState.INSIDE_SPHERE
+      || isPanelVisible()
+    ) {
+      return false;
+    }
+    altRollStroke = {
+      pointerId: event.pointerId,
+      lastAngle: altRollAngle(event, rect).angle,
+      lastAt: now,
+      velocity: 0
+    };
+    state.sphereZRotSpeed = 0;
+    markSphereInteraction();
+    return true;
+  }
+  if (!altRollStroke || event.pointerId !== altRollStroke.pointerId) {
+    return false;
+  }
+  if (type === "move") {
+    const { angle, radius } = altRollAngle(event, rect);
+    // Near the centre the angle swings wildly for a tiny move.
+    if (radius >= ALT_ROLL_CENTRE_DEADZONE_PX) {
+      const deltaRad = wrapRollAngle(angle - altRollStroke.lastAngle);
+      const dtS = Math.max(1, now - altRollStroke.lastAt) / 1000;
+      const blend = Math.min(1, dtS / 0.06);
+      altRollStroke.velocity += (deltaRad / dtS - altRollStroke.velocity) * blend;
+      altRollStroke.lastAt = now;
+      state.sphereZRotSpeed = 0;
+      applySphereRollRotation(deltaRad);
+      markSphereInteraction();
+    }
+    altRollStroke.lastAngle = angle;
+    return true;
+  }
+  if (type === "up") {
+    const fresh = now - altRollStroke.lastAt <= ALT_ROLL_THROW_WINDOW_MS;
+    if (fresh && Math.abs(altRollStroke.velocity) >= TOUCH_TWIST_THROW_RAD_PER_S) {
+      state.sphereZRotSpeed = altRollStroke.velocity;
+      state.sphereCoastTauS = SPHERE_COAST_TAU_HAND_THROW_S;
+      holdSphereDriftResume();
+    }
+  }
+  altRollStroke = null;
+  return true;
 }
 
 // --- Shift + click-drag ------------------------------------------------------
@@ -1944,6 +2067,8 @@ export {
   recordShiftDragEvent,
   endShiftDragIfShiftReleased,
   applyShiftDragInput,
+  recordAltRollEvent,
+  isAltRollActive,
   recordDesktopPointerEvent,
   applyDesktopPointerSphereInput,
   resetDesktopPointerGestures,

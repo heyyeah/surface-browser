@@ -4,7 +4,7 @@ import path from "node:path";
 import { downscaleProxiedImage } from "./images.js";
 import { buildPoolKey, drawPoolIndexes, planPoolDraw, planPoolFallback, poolSourceAddress } from "./genai-pool.js";
 import { applyPoolSuppression, loadPoolPack, mergePools, poolMemberCount, readPoolMember } from "./genai-pool-pack.js";
-import { addGrownMember, bookmarkPromptSet, loadGrowStore, poolGrowthRound } from "./genai-pool-grow.js";
+import { addGrownMember, bookmarkPromptSet, loadGrowStore, poolGrowthRound, removeGrownMembers } from "./genai-pool-grow.js";
 import { defaultSuppressionPath, readSuppression, writeSuppression } from "./genai-pool-suppression.js";
 import { clampNumber, parseBoolean, parseNonNegativeInteger, parsePositiveInteger } from "./env.js";
 import { logApiQuery } from "./query-log.js";
@@ -80,9 +80,36 @@ export function initGenAiPoolRuntime(deps) {
   bakedGenAiPool = loadPoolPack(GENAI_POOL_DIR);
   grownGenAiPool = loadGrowStore(GENAI_POOL_GROW_DIR);
   poolSuppression = readSuppression(GENAI_POOL_SUPPRESS_FILE);
+  purgeTombstonedGrownMembers();
   genAiPool.rebuild();
   GENAI_BOOKMARK_PROMPTS = bookmarkPromptSet(genAiBookmarkPrompts());
   return GENAI_BOOKMARK_PROMPTS;
+}
+
+// Grown members deleted when deletion only hid them. Their tombstones go too.
+function purgeTombstonedGrownMembers() {
+  if (poolSuppression.error || !grownGenAiPool.active) {
+    return;
+  }
+  const ids = [...poolSuppression.ids].filter((id) => grownGenAiPool.byId.has(id) && !bakedGenAiPool.byId?.has(id));
+  if (!ids.length) {
+    return;
+  }
+  const result = removeGrownMembers(grownGenAiPool, ids);
+  if (result.error) {
+    console.warn(`GenAI pool growth: could not purge deleted members: ${result.error}`);
+    return;
+  }
+  grownGenAiPool = result.store;
+  const records = new Map(poolSuppression.records);
+  ids.forEach((id) => records.delete(id));
+  try {
+    writeSuppression(poolSuppression.path, records);
+    poolSuppression = { ...poolSuppression, records, ids: new Set(records.keys()) };
+  } catch (err) {
+    console.warn(`Could not write ${poolSuppression.path}: ${err.message}`);
+  }
+  console.log(`GenAI pool growth: purged ${ids.length} deleted members`);
 }
 
 export function handlePoolReviewPage(_req, res) {
@@ -134,10 +161,17 @@ export function handlePoolSuppress(req, res) {
   const suppress = req.body?.suppressed !== false;
   const reason = String(req.body?.reason || "").slice(0, 200);
   const records = new Map(poolSuppression.records);
-  let changed = 0;
+  const grownIds = [];
+  let tombstonesChanged = 0;
   for (const id of ids) {
     const member = genAiPool.pool.byId?.get(id);
     if (!member) {
+      continue;
+    }
+    // Grown images are really deleted. Only a baked one, in its immutable pack,
+    // can be no more than hidden.
+    if (suppress && member.store === "grown") {
+      grownIds.push(id);
       continue;
     }
     if (suppress) {
@@ -148,9 +182,9 @@ export function handlePoolSuppress(req, res) {
     } else if (!records.delete(id)) {
       continue;
     }
-    changed += 1;
+    tombstonesChanged += 1;
   }
-  if (changed) {
+  if (tombstonesChanged) {
     try {
       writeSuppression(poolSuppression.path, records);
     } catch (err) {
@@ -158,6 +192,22 @@ export function handlePoolSuppress(req, res) {
       return;
     }
     poolSuppression = { ...poolSuppression, records, ids: new Set(records.keys()) };
+  }
+  if (grownIds.length) {
+    const result = removeGrownMembers(grownGenAiPool, grownIds);
+    if (result.error) {
+      res.status(500).json({ error: `Could not delete from ${grownGenAiPool.dir}: ${result.error}` });
+      return;
+    }
+    grownGenAiPool = result.store;
+    for (const cacheKey of poolReviewThumbnails.keys()) {
+      if (grownIds.includes(cacheKey.slice(0, cacheKey.lastIndexOf(":")))) {
+        poolReviewThumbnails.delete(cacheKey);
+      }
+    }
+  }
+  const changed = tombstonesChanged + grownIds.length;
+  if (changed) {
     genAiPool.rebuild();
     // A cached result replays above the draw, so a deleted image could
     // otherwise still come back for the rest of the cache's TTL.
@@ -654,7 +704,7 @@ export function growGenAiPool(slot, items) {
       console.warn(`GenAI pool growth: slot ${slot.index} was planned with ${slot.modifier?.emoji || "no emoji"} but made with ${item.genai.modifier?.emoji || "none"}; not kept`);
       continue;
     }
-    // byId holds suppressed members too, so a deleted image is not kept again.
+    // byId holds suppressed members too, so a hidden baked image is not kept again.
     if (genAiPool.pool.byId?.has(address) || poolMemberCount(genAiPool.pool, slot.key) >= GENAI_POOL_GROW_MAX_PER_KEY) {
       continue;
     }

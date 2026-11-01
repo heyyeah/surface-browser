@@ -51,6 +51,7 @@ test("no translation is left as its English source", () => {
     "start.aria",         // "Favorites"/"Favoris" differ; English vs French only
     "vr.short", "key.zoomIn", "key.zoomOut", "key.x", "key.ay",
     "key.thumbstick",     // "Joystick" in French
+    "submit.type", "submit.name",  // Type in French, Name in German
     "help.tunnel.title",  // "Tunnel" is the same word in all three
     // Callout tags are single words chosen to be short enough to read at a
     // glance on a controller; several are the same word in all three.

@@ -20,6 +20,8 @@ import {
   TOUCH_TAP_MAX_MOVE_PX,
   TOUCH_TAP_MAX_MS,
   TOUCH_PINCH_SLOP_PX,
+  TOUCH_TWIST_DEADZONE_RAD,
+  TOUCH_TWIST_THROW_RAD_PER_S,
   TOUCH_CHORD_HOLD_MS,
   TOUCH_CHORD_RING_DELAY_MS,
   TOUCH_DRAG_HAND_METERS_PER_SHORT_EDGE,
@@ -925,4 +927,96 @@ test("the DESKTOP MOUSE call site still refuses it, deliberately", () => {
   const call = inputJs.slice(inputJs.indexOf("stepTouchGestures(desktopPointerGestureState, {"));
   const options = call.slice(0, call.indexOf("});"));
   assert.match(options, /genAiAvailable:\s*false/);
+});
+
+// --- Two-finger twist: sphere roll --------------------------------------------
+
+// Places finger 2 on a circle of `radius` around finger 1's fixed point, at
+// `deg` clockwise on screen (screen y points down).
+function twistTo(d, deg, radius = 100) {
+  const rad = deg * Math.PI / 180;
+  d.event("move", 2, 200 + radius * Math.cos(rad), 400 + radius * Math.sin(rad));
+}
+
+function twistStart(d) {
+  d.event("down", 1, 200, 400);
+  d.event("down", 2, 300, 400);
+  d.frame();
+}
+
+test("a twist inside the dead zone rolls nothing", () => {
+  const d = createDriver();
+  twistStart(d);
+  twistTo(d, (TOUCH_TWIST_DEADZONE_RAD * 180 / Math.PI) - 1);
+  d.frame();
+  assert.ok(d.decisions.every((dec) => !dec.twist.active));
+});
+
+test("past the dead zone the twist rolls by the angle turned since, clockwise positive", () => {
+  const d = createDriver();
+  twistStart(d);
+  twistTo(d, 10);
+  const engaged = d.frame();
+  assert.equal(engaged.twist.active, false, "the engaging step absorbs the dead zone");
+  twistTo(d, 25);
+  const turned = d.frame();
+  assert.equal(turned.twist.active, true);
+  assert.ok(Math.abs(turned.twist.deltaRad - (15 * Math.PI / 180)) < 1e-9);
+  twistTo(d, 20);
+  assert.ok(d.frame().twist.deltaRad < 0, "anticlockwise is negative");
+});
+
+test("a twist cancels the GenAI hold and cannot fire the chord", () => {
+  const d = createDriver();
+  d.event("down", 1, 200, 400);
+  d.event("down", 2, 210, 400);   // close together, so the slop is not crossed
+  d.frame();
+  d.event("move", 2, 200 + 10 * Math.cos(0.3), 400 + 10 * Math.sin(0.3));
+  d.frame();
+  d.wait(TOUCH_CHORD_HOLD_MS + 100);
+  assert.equal(d.anyChord(), false);
+});
+
+test("twist is sphere-only: in the tunnel the pair is just the speed pinch", () => {
+  const d = createDriver({ appState: APP_STATE_TUNNEL });
+  twistStart(d);
+  for (let deg = 5; deg <= 60; deg += 5) {
+    twistTo(d, deg);
+    d.frame();
+  }
+  assert.ok(d.decisions.every((dec) => !dec.twist.active));
+});
+
+test("a fast twist released keeps spinning; a slow one does not", () => {
+  const fast = createDriver();
+  twistStart(fast);
+  for (let deg = 10; deg <= 90; deg += 10) {
+    twistTo(fast, deg);
+    fast.frame();
+  }
+  fast.event("up", 2, 200, 300);
+  const released = fast.frame();
+  assert.ok(released.twist.releaseSpinRadPerS >= TOUCH_TWIST_THROW_RAD_PER_S);
+
+  const slow = createDriver();
+  twistStart(slow);
+  for (let deg = 9; deg <= 30; deg += 1) {
+    twistTo(slow, deg);
+    slow.frame(50);
+  }
+  slow.wait(200);
+  slow.event("up", 2, 200, 300);
+  assert.equal(slow.frame().twist.releaseSpinRadPerS, null);
+});
+
+test("a pair crossing the atan2 seam reads as a small turn, not a full circle", () => {
+  const d = createDriver();
+  d.event("down", 1, 200, 400);
+  d.event("down", 2, 100, 400);   // finger 2 to the left: angle PI
+  d.frame();
+  twistTo(d, 170);
+  d.frame();
+  twistTo(d, 190);
+  const crossed = d.frame();
+  assert.ok(Math.abs(crossed.twist.deltaRad - (20 * Math.PI / 180)) < 1e-9);
 });

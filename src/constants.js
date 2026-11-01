@@ -16,20 +16,26 @@ export const SPHERE_FOG_COLOR = new THREE.Color().setRGB(0.11, 0.12, 0.50, THREE
 export const SPHERE_IDLE_COLOR = 0x90a8ff;
 export const SPHERE_NO_LINK_COLOR = 0x3f4f9c;
 
-export const IMAGE_SPAWN_INTERVAL_MS = 1300;
+// Tunnel images are fed by distance flown, so speeding up brings them sooner and
+// keeps their spacing. The interval is only the floor for a very slow flight.
+export const IMAGE_SPAWN_SPACING_RINGS = 15;
+export const IMAGE_SPAWN_MAX_INTERVAL_MS = 1300;
+// Images still fetching before the feed waits: at full speed the network is the limit.
+export const IMAGE_SPAWN_MAX_LOADS_IN_FLIGHT = 3;
 export const MAX_PANELS = 15;
 export const SPHERE_IMAGE_COUNT = 8;
 export const SPHERE_DWELL_SECONDS = 20;
 // A new panel takes the gaze selection only once it is this much nearer the view
 // centre than the selected one.
 export const SPHERE_SELECTION_HYSTERESIS_RAD = 1.5 * Math.PI / 180;
-export const SPHERE_ENTRY_SETTLE_MS = 1200;
+// Distance-paced like the feed: this long at the default speed, less when faster.
+export const SPHERE_ENTRY_SETTLE_MS = 800;
 // The GenAI tunnel handoff is gated by job completeness, not a timer. The
 // default must be 0 (transition once all expected images have arrived and the
 // panel queue has drained); a non-zero value is a theatrical floor.
 export const GENAI_MIN_TUNNEL_DISPLAY_MS = 0;
 export const SPHERE_ENTRY_LEAD_RINGS = 60;
-export const SPHERE_ENTRY_AFTER_LAST_PANEL_RINGS = 40;
+export const SPHERE_ENTRY_AFTER_LAST_PANEL_RINGS = 30;
 export const SPHERE_EXIT_DISTANCE_RINGS = 25;
 // Length of the camera-iris "shutter opening" animation on arriving inside the
 // sphere. The start scale matches SPHERE_PREVIEW_MAX_SCALE so the approach

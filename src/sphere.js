@@ -3,6 +3,7 @@
 
 import * as THREE from "three";
 import { loadProxiedTexture } from "./proxied-texture.js";
+import { xrHeadCamera } from "./xr-head-camera.js";
 import {
   SPHERE_IDLE_COLOR,
   SPHERE_SELECTION_HYSTERESIS_RAD,
@@ -146,6 +147,9 @@ const SPHERE_CAPTION_RENDER_ORDER = 1000;
 const SPHERE_CAPTION_VIEWER_INSET_M = 1.50;
 const _pointerRotX = new THREE.Quaternion();
 const _pointerRotY = new THREE.Quaternion();
+const _rollRot = new THREE.Quaternion();
+const _rollAxis = new THREE.Vector3();
+const _rollParentQuat = new THREE.Quaternion();
 
 function clearSphere() {
   for (const panel of spherePanels) {
@@ -188,6 +192,7 @@ function resetSphereAnimationState() {
   state.sphereSelectionPulseElapsed = 0;
   state.sphereXRotSpeed = 0;
   state.sphereYRotSpeed = 0;
+  state.sphereZRotSpeed = 0;
   // The coast forgets the last sphere's throw along with the speed it was
   // decaying: a fresh sphere starts at stick feel.
   state.sphereCoastTauS = SPHERE_COAST_TAU_STICK_S;
@@ -640,7 +645,7 @@ function spawnSphereFromExtractedItems() {
 // desktop camera). The XR camera tracks the headset, so panel directions are
 // dotted against its live forward vector for look-to-select.
 function getActiveCamera() {
-  return renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  return renderer.xr.isPresenting ? xrHeadCamera(renderer.xr.getCamera()) : camera;
 }
 
 function spherePanelIdleColor(panel) {
@@ -1076,6 +1081,7 @@ function toggleSphereRotation() {
   if (state.sphereRotationPaused) {
     state.sphereXRotSpeed = 0;
     state.sphereYRotSpeed = 0;
+    state.sphereZRotSpeed = 0;
   }
   markSphereInteraction();
   setStatus(t(state.sphereRotationPaused ? "status.rotationPaused" : "status.rotationResumed"), true);
@@ -1208,6 +1214,7 @@ function applySpherePointerRotation(deltaPitch, deltaYaw) {
   applyManualLayerDifferential(deltaPitch, deltaYaw);
   state.sphereXRotSpeed = 0;
   state.sphereYRotSpeed = 0;
+  state.sphereZRotSpeed = 0;
   // A mouse drag has no momentum model, so it also hands the coast back to the
   // stick constant; nothing here inherits a throw's tail.
   state.sphereCoastTauS = SPHERE_COAST_TAU_STICK_S;
@@ -1251,6 +1258,39 @@ function applySphereGrabRotation(deltaPitch, deltaYaw) {
   applyPausedIrisCoupling(deltaPitch, deltaYaw);
   applyManualLayerDifferential(deltaPitch, deltaYaw);
   advanceSphereTextureCycle(Math.abs(deltaPitch) + Math.abs(deltaYaw));
+  state.sphereRotationInputActive = true;
+  return true;
+}
+
+// Roll turns the sphere about the viewer's gaze, not a fixed axis: in VR the
+// sphere's own forward is wherever it was entered, so a fixed axis would tip it
+// over instead of turning it like a picture. Returned in sphereContentGroup's
+// parent frame, the frame sphereOrientation is premultiplied in.
+function gazeRollAxis() {
+  getActiveCamera().getWorldDirection(_rollAxis);
+  const parent = sphereContentGroup.parent;
+  if (parent) {
+    parent.getWorldQuaternion(_rollParentQuat).invert();
+    _rollAxis.applyQuaternion(_rollParentQuat);
+  }
+  return _rollAxis.normalize();
+}
+
+// Positive = clockwise as the viewer sees it (the axis points away from them).
+// Writes the angle directly, like applySphereGrabRotation(); momentum is the
+// caller's business through state.sphereZRotSpeed.
+function applySphereRollRotation(deltaRad) {
+  if (
+    state.appState !== AppState.INSIDE_SPHERE
+    || state.irisForming
+    || !deltaRad
+  ) {
+    return false;
+  }
+  sphereOrientation.premultiply(_rollRot.setFromAxisAngle(gazeRollAxis(), deltaRad));
+  sphereOrientation.normalize();
+  sphereContentGroup.quaternion.copy(sphereOrientation);
+  advanceSphereTextureCycle(Math.abs(deltaRad));
   state.sphereRotationInputActive = true;
   return true;
 }
@@ -1593,7 +1633,8 @@ function updateSphereAnimation(dt, isInsideSphere, transitionProgress = 1, isExi
       holdSeconds: state.sphereDriftHoldSeconds,
       manualSpeed: Math.max(
         Math.abs(state.sphereXRotSpeed),
-        Math.abs(state.sphereYRotSpeed)
+        Math.abs(state.sphereYRotSpeed),
+        Math.abs(state.sphereZRotSpeed)
       ),
       driftSpeed: SPHERE_BASE_ROTATION_SPEED,
       resumeSeconds: DRIFT_RESUME_SECONDS
@@ -1629,12 +1670,18 @@ function updateSphereAnimation(dt, isInsideSphere, transitionProgress = 1, isExi
       _manualRotY.setFromAxisAngle(AXIS_Y, deltaYaw);
       sphereOrientation.premultiply(_manualRotX);
       sphereOrientation.premultiply(_manualRotY);
+      const deltaRoll = state.sphereZRotSpeed * dt;
+      if (deltaRoll) {
+        sphereOrientation.premultiply(_rollRot.setFromAxisAngle(gazeRollAxis(), deltaRoll));
+        textureCycleDelta += Math.abs(deltaRoll);
+      }
       sphereOrientation.normalize();
       sphereContentGroup.quaternion.copy(sphereOrientation);
       if (state.sphereRotationPaused) {
         if (!state.sphereRotationInputActive) {
           state.sphereXRotSpeed = 0;
           state.sphereYRotSpeed = 0;
+          state.sphereZRotSpeed = 0;
         }
       } else {
         // The coast: a time constant, not a per-frame factor (which is
@@ -1644,12 +1691,14 @@ function updateSphereAnimation(dt, isInsideSphere, transitionProgress = 1, isExi
         const tauS = state.sphereCoastTauS;
         state.sphereXRotSpeed = stepCoastSpeed(state.sphereXRotSpeed, { dtS: dt, tauS });
         state.sphereYRotSpeed = stepCoastSpeed(state.sphereYRotSpeed, { dtS: dt, tauS });
+        state.sphereZRotSpeed = stepCoastSpeed(state.sphereZRotSpeed, { dtS: dt, tauS });
       }
     } else {
       // Hold the current orientation steady through the opening
       sphereContentGroup.quaternion.copy(sphereOrientation);
       state.sphereXRotSpeed = 0;
       state.sphereYRotSpeed = 0;
+      state.sphereZRotSpeed = 0;
     }
 
     if (isExitingSphere && state.sphereExitSteersToSelection) {
@@ -1752,6 +1801,7 @@ function startSphereExit({
     // image or coasting on inertia.
     state.sphereXRotSpeed = 0;
     state.sphereYRotSpeed = 0;
+    state.sphereZRotSpeed = 0;
   }
   if (state.tunnelMesh?.material) {
     state.tunnelMesh.material.opacity = TUNNEL_TUBE_OPACITY;
@@ -1834,6 +1884,7 @@ export {
   applySphereRotationDelta,
   applySpherePointerRotation,
   applySphereGrabRotation,
+  applySphereRollRotation,
   activateSelectedSphereLink,
   activateSelectedSphereImageForGenAi,
   spherePanelIndexAtCanvasPoint,

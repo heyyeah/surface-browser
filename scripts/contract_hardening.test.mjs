@@ -16,7 +16,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { Agent as UndiciAgent } from "undici";
+import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import { fileURLToPath } from "node:url";
 import { startServer, startMockSdapi, startImageSearchMock, findFreePort } from "./contract_helpers.mjs";
 import { encodePng } from "./png.mjs";
@@ -529,11 +529,12 @@ test("DNS pinning mechanism: fetch() only reaches an address the dispatcher's lo
     // custom connect.lookup handing back the already-validated address,
     // ignoring whatever hostname undici asks about.
     const dispatcher = new UndiciAgent({
+      allowH2: false,
       connect: {
         lookup: (_hostname, _options, callback) => callback(null, [{ address: "127.0.0.1", family: 4 }])
       }
     });
-    const res = await fetch(unresolvableUrl, { dispatcher });
+    const res = await undiciFetch(unresolvableUrl, { dispatcher });
     assert.equal(res.status, 200);
     assert.equal(await res.text(), "pinned", "the pinned dispatcher, not real DNS, decided where fetch() connected");
   } finally {

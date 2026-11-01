@@ -5,6 +5,8 @@ import { bookmarksBtn, bookmarksMenu, urlInput } from "./dom.js";
 import { setAddressFeedback, focusSceneCanvas } from "./ui.js";
 import { BookmarkKind, DEFAULT_BOOKMARKS, bookmarkTitle, pickStartBookmarks } from "../shared/bookmark-presets.js";
 import { t } from "./i18n.js";
+import { isSubmissionsEnabled } from "./submissions.js";
+import { openSubmitDialog } from "./submit-dialog.js";
 
 let genAiBookmarksEnabled = false;
 // Picked once per page load, and shared, so the flat start screen and the VR
@@ -62,6 +64,28 @@ async function activateBookmark(bookmark) {
   focusSceneCanvas();
 }
 
+function menuRow(modeText, modeClass, titleText, ariaLabel, tooltip, onClick) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = "bookmark-menu-item";
+  item.role = "menuitem";
+  item.ariaLabel = ariaLabel;
+  item.title = tooltip;
+
+  const mode = document.createElement("span");
+  mode.className = `bookmark-mode ${modeClass}`;
+  mode.textContent = modeText;
+  item.appendChild(mode);
+
+  const title = document.createElement("span");
+  title.className = "bookmark-title";
+  title.textContent = titleText;
+  item.appendChild(title);
+
+  item.addEventListener("click", onClick);
+  return item;
+}
+
 function renderBookmarksMenu(bookmarks = DEFAULT_BOOKMARKS) {
   if (!bookmarksMenu) {
     return;
@@ -71,27 +95,22 @@ function renderBookmarksMenu(bookmarks = DEFAULT_BOOKMARKS) {
     if (bookmark.kind === BookmarkKind.GENAI_PROMPT && !genAiBookmarksEnabled) {
       continue;
     }
-    const item = document.createElement("button");
-    item.type = "button";
-    item.className = "bookmark-menu-item";
-    item.role = "menuitem";
-    item.ariaLabel = `${bookmarkModeLabel(bookmark.kind)} ${bookmark.value}`;
-    item.title = bookmark.value;
-
-    const mode = document.createElement("span");
-    mode.className = `bookmark-mode bookmark-mode-${bookmark.kind}`;
-    mode.textContent = bookmarkModeLabel(bookmark.kind);
-    item.appendChild(mode);
-
-    const title = document.createElement("span");
-    title.className = "bookmark-title";
-    title.textContent = bookmarkTitle(bookmark);
-    item.appendChild(title);
-
-    item.addEventListener("click", () => {
-      void activateBookmark(bookmark);
-    });
-    bookmarksMenu.appendChild(item);
+    bookmarksMenu.appendChild(menuRow(
+      bookmarkModeLabel(bookmark.kind),
+      `bookmark-mode-${bookmark.kind}`,
+      bookmarkTitle(bookmark),
+      `${bookmarkModeLabel(bookmark.kind)} ${bookmark.value}`,
+      bookmark.value,
+      () => { void activateBookmark(bookmark); }
+    ));
+  }
+  if (isSubmissionsEnabled()) {
+    const chip = t("submit.menuChip");
+    const label = t("submit.menuRow");
+    bookmarksMenu.appendChild(menuRow(chip, "", label, `${chip} ${label}`, label, () => {
+      setBookmarksMenuOpen(false);
+      openSubmitDialog({ menuKind: BookmarkKind.WEB_PAGE, genAiEnabled: genAiBookmarksEnabled });
+    }));
   }
 }
 

@@ -3,8 +3,9 @@
 
 import * as THREE from "three";
 import { loadProxiedTexture } from "./proxied-texture.js";
+import { xrHeadCamera } from "./xr-head-camera.js";
 import {
-  IMAGE_SPAWN_INTERVAL_MS,
+  IMAGE_SPAWN_SPACING_RINGS,
   MAX_PANELS,
   SPHERE_ENTRY_LEAD_RINGS,
   SPHERE_EXIT_DISTANCE_RINGS,
@@ -13,7 +14,7 @@ import {
   AppState
 } from "./constants.js";
 import { state } from "./state.js";
-import { tunnelRunStartRing } from "./tunnel-run.js";
+import { stepImageFeed, tunnelRunStartRing } from "./tunnel-run.js";
 import { ringsInput, segmentsInput } from "./dom.js";
 import {
   renderer,
@@ -57,7 +58,8 @@ function nextTunnelRunStartRing() {
 }
 const TUNNEL_WRAP_SAFETY_RINGS = SPHERE_ENTRY_LEAD_RINGS + SPHERE_EXIT_DISTANCE_RINGS + 60;
 const TUNNEL_PANEL_MIN_FORWARD_RINGS = 90;
-const TUNNEL_PANEL_SPACING_RINGS = 15;
+// The floor that keeps images apart however fast they arrive.
+const TUNNEL_PANEL_SPACING_RINGS = IMAGE_SPAWN_SPACING_RINGS;
 let tunnelPanelGeneration = 0;
 let pendingTunnelPanelLoads = 0;
 const _xrHeadPosition = new THREE.Vector3();
@@ -249,7 +251,7 @@ function clearPanels() {
   tunnelPanelGeneration += 1;
   pendingTunnelPanelLoads = 0;
   state.pendingPanelItems = [];
-  state.spawnAccumulatorMs = 0;
+  state.spawnProgress = 0;
   for (const panel of imagePanels) {
     disposeImagePanel(panel);
   }
@@ -448,7 +450,7 @@ function setImagePanels(items) {
   const maxPanels = Math.min(items.length, MAX_PANELS);
   state.lastSpawnedPanelRing = state.currentRingFloat + 20;
   state.pendingPanelItems = items.slice(0, maxPanels);
-  state.spawnAccumulatorMs = IMAGE_SPAWN_INTERVAL_MS;
+  state.spawnProgress = 1;
 }
 
 function appendImagePanels(items) {
@@ -462,20 +464,28 @@ function appendImagePanels(items) {
   }
   state.pendingPanelItems.push(...items.slice(0, remaining));
   if (state.pendingPanelItems.length > 0 && imagePanels.length === 0) {
-    state.spawnAccumulatorMs = IMAGE_SPAWN_INTERVAL_MS;
+    state.spawnProgress = 1;
   }
 }
 
 function updatePanelSpawning(dt) {
-  if (state.pendingPanelItems.length === 0) {
+  if (state.pendingPanelItems.length === 0 || !state.tunnelConfig) {
     return;
   }
-  state.spawnAccumulatorMs += dt * 1000;
-  while (state.pendingPanelItems.length > 0 && state.spawnAccumulatorMs >= IMAGE_SPAWN_INTERVAL_MS) {
-    state.spawnAccumulatorMs -= IMAGE_SPAWN_INTERVAL_MS;
-    const item = state.pendingPanelItems.shift();
-    spawnPanel(item, imagePanels.length);
+  const feed = stepImageFeed({
+    progress: state.spawnProgress,
+    ringsPerSecond: state.cameraSpeed / state.tunnelConfig.distBetweenRings,
+    dtS: dt,
+    loadsInFlight: pendingTunnelPanelLoads
+  });
+  state.spawnProgress = feed.progress;
+  if (feed.spawn) {
+    spawnPanel(state.pendingPanelItems.shift(), imagePanels.length);
   }
+}
+
+function tunnelPanelLoadsPending() {
+  return pendingTunnelPanelLoads > 0;
 }
 
 function flushPendingPanelSpawnsForDebug() {
@@ -488,7 +498,7 @@ function flushPendingPanelSpawnsForDebug() {
       panel.mesh.material.opacity = panel.targetOpacity;
     }
   }
-  state.spawnAccumulatorMs = 0;
+  state.spawnProgress = 0;
 }
 
 function removeExpiredPanels() {
@@ -557,7 +567,7 @@ function updateWorldTransform() {
   if (renderer.xr.isPresenting) {
     const xrCamera = renderer.xr.getCamera(camera);
     xrCamera.updateMatrixWorld();
-    _xrHeadPosition.setFromMatrixPosition(xrCamera.matrixWorld);
+    _xrHeadPosition.setFromMatrixPosition(xrHeadCamera(xrCamera).matrixWorld);
     if (
       Number.isFinite(_xrHeadPosition.x)
       && Number.isFinite(_xrHeadPosition.y)
@@ -607,6 +617,7 @@ export {
   updatePanelFades,
   setImagePanels,
   appendImagePanels,
+  tunnelPanelLoadsPending,
   updatePanelSpawning,
   flushPendingPanelSpawnsForDebug,
   removeExpiredPanels,

@@ -8,6 +8,7 @@ import {
   statusFooter,
   exitVrBtn,
   backBtn,
+  startPanel,
   urlInput,
   canvas,
   perfLabel,
@@ -23,6 +24,7 @@ import {
 import { canGoBack, goBack } from "./api.js";
 import { AppState } from "./constants.js";
 import { renderer, camera, scene, spherePanels } from "./scene.js";
+import { xrHeadCamera } from "./xr-head-camera.js";
 import { passthroughSessionSupported } from "./passthrough.js";
 import { state } from "./state.js";
 import {
@@ -310,7 +312,7 @@ function syncBackButton() {
   }
   // Not gated on cycleRequestInFlight: Back works mid-load, and gating would
   // make the button flicker through every load.
-  const enabled = canGoBack();
+  const enabled = canGoBack() || canReturnToWelcome();
   if (enabled === lastBackEnabled) {
     return;
   }
@@ -323,8 +325,23 @@ backBtn?.addEventListener("click", (event) => {
   if (backBtn.disabled) {
     return;
   }
-  void goBack();
+  if (canGoBack()) {
+    void goBack();
+    return;
+  }
+  returnToWelcome();
 });
+
+// With nothing left to go back to, Back goes to the start cards. A reload of the
+// bare page rather than a scene teardown: it is the one reset that cannot leave
+// a load, a GenAI job or sphere state half-cleared.
+function canReturnToWelcome() {
+  return Boolean(startPanel?.hidden);
+}
+
+function returnToWelcome() {
+  window.location.assign(window.location.pathname);
+}
 
 function setStatusFooterEnabled(enabled, { persist = false } = {}) {
   statusFooterEnabled = Boolean(enabled);
@@ -710,7 +727,7 @@ function anchorVrStatusFooter() {
   if (!statusFooterMesh) {
     return;
   }
-  const activeCamera = renderer.xr.isPresenting ? renderer.xr.getCamera(camera) : camera;
+  const activeCamera = renderer.xr.isPresenting ? xrHeadCamera(renderer.xr.getCamera(camera)) : camera;
   // Module scratch, not fresh Vector3s per frame. Nothing escapes: the mesh's
   // position and lookAt both copy from these.
   const camPos = _footerCamPos;

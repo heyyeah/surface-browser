@@ -3786,7 +3786,8 @@ test("sphere.js counts the hold down and gates the drift on the gain", () => {
     input.indexOf("holdSphereDriftResume();", touchRelease) > touchRelease,
     "...and arms the hold inside it"
   );
-  assert.equal(input.match(/holdSphereDriftResume\(\);/g).length, 2);
+  // Hand, touch drag, touch twist, Alt+drag roll.
+  assert.equal(input.match(/holdSphereDriftResume\(\);/g).length, 4);
 });
 
 // --- The layer differential --------------------------------------------------

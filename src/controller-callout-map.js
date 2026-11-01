@@ -53,8 +53,8 @@ function entry(id, component, tier, glyph, labelKey, available = true, hold = fa
   return { id, component, tier, glyph, labelKey, available, hold, lettered };
 }
 
-// LEFT. The stick is up/down in both states: inside the sphere input.js reads only
-// axis Y on this hand, so a four-way glyph would promise a movement that does nothing.
+// LEFT. In the sphere the stick is four-way: Y zooms, X rolls the sphere. In the
+// tunnel only Y does anything (speed), so it stays up/down there.
 // Select acts in the sphere (the gaze-targeted image) and on any open panel, and
 // does nothing in the tunnel with nothing open. It is the one availability that
 // changes without the app state changing, so the redraw key carries it.
@@ -65,8 +65,9 @@ function selectAvailable(inSphere, panelOpen) {
 function leftCallouts({ inSphere, captureEnabled, genaiEnabled, panelOpen }) {
   return [
     entry(
-      "left-stick-axes", THUMBSTICK, TIER_PRIMARY, GLYPH_UP_DOWN,
-      inSphere ? "callout.zoom" : "callout.speed"
+      "left-stick-axes", THUMBSTICK, TIER_PRIMARY,
+      inSphere ? GLYPH_FOUR_WAY : GLYPH_UP_DOWN,
+      inSphere ? "callout.zoomRoll" : "callout.speed"
     ),
     // X is the menu: the lower, more reachable button.
     entry("left-x", "x-button", TIER_PRIMARY, ICON_MENU, "callout.menu", true, false, true),
@@ -91,8 +92,8 @@ function leftCallouts({ inSphere, captureEnabled, genaiEnabled, panelOpen }) {
   ];
 }
 
-// RIGHT. The only four-way on either controller, and only inside the sphere; in
-// the tunnel this stick drives speed on axis Y like the left one.
+// RIGHT. Four-way inside the sphere (yaw/pitch); in the tunnel this stick drives
+// speed on axis Y like the left one.
 function rightCallouts({ inSphere, panelOpen }) {
   return [
     entry(

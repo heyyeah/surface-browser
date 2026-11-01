@@ -40,7 +40,8 @@ import {
   setTunnelClipPlane,
   clearPanels,
   flushPendingPanelSpawnsForDebug,
-  nextTunnelRunStartRing
+  nextTunnelRunStartRing,
+  tunnelPanelLoadsPending
 } from "./tunnel.js";
 import {
   clearSphere,
@@ -156,11 +157,12 @@ function maybeTransitionFromTunnelToSphere(dt) {
     state.tunnelSettledMs = 0;
     return;
   }
-  if (state.pendingPanelItems.length > 0) {
+  // Fetching counts as pending: an image still loading has yet to take its place.
+  if (state.pendingPanelItems.length > 0 || tunnelPanelLoadsPending()) {
     state.tunnelSettledMs = 0;
     return;
   }
-  state.tunnelSettledMs += dt * 1000;
+  state.tunnelSettledMs += dt * 1000 * Math.max(1, state.cameraSpeed / DEFAULT_CAMERA_SPEED);
   if (state.tunnelSettledMs < SPHERE_ENTRY_SETTLE_MS) {
     return;
   }

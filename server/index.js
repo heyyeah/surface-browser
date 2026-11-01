@@ -21,6 +21,7 @@ import { createLiveMonitor, deviceFromUserAgent, parseReferrer, parseSessionId }
 import { Reader as MmdbReader } from "mmdb-lib";
 import { createInFlightRequests } from "./in-flight.js";
 import { createSpendGuard, createKillSwitch, spendClientKey } from "./spend-guard.js";
+import { appendSubmission, createSubmissionQuota, normalizeSubmission } from "./submissions.js";
 import { hasNavigableUrlShape } from "../shared/url-shape.js";
 import {
   clampNumber,
@@ -245,6 +246,10 @@ const killSwitch = createKillSwitch({
 });
 const GENAI_BOOKMARK_PROMPTS = initGenAiPoolRuntime({ isGenAiQueueFull, genAiResultCache });
 initQueryLog({ liveMonitor, liveSessionContext, bookmarkPrompts: GENAI_BOOKMARK_PROMPTS });
+// Unset = no Submit form. Everything else about it is the monitor's job.
+const SUBMISSIONS_PATH = process.env.SUBMISSIONS_PATH ? resolveFilePath(process.env.SUBMISSIONS_PATH) : "";
+const takeSubmissionQuota = createSubmissionQuota();
+
 initSearch({ killSwitch, spendGuard, getSpendClientKey });
 initGenAiJobs({ killSwitch, spendGuard, getSpendClientKey, genAiPromptCache });
 
@@ -277,7 +282,7 @@ app.use(cors(buildCorsOptions()));
 app.use("/api/screenshot", screenshotAuthGate);
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "1mb" }));
 app.use("/api", liveMonitorMiddleware);
-app.use(["/api/extract", "/api/proxy/image", "/api/search/images", "/api/genai", "/api/stt", "/api/debug/xr"], rateLimitRequests);
+app.use(["/api/extract", "/api/proxy/image", "/api/search/images", "/api/genai", "/api/stt", "/api/debug/xr", "/api/submit"], rateLimitRequests);
 // Separate pools, so page loads (and the renders inside them, seconds each) can
 // never use up the slots images need.
 const scrapeConcurrencyGuard = createConcurrencyGuard(SCRAPE_CONCURRENCY_MAX, SCRAPE_CONCURRENCY_PER_CLIENT);
@@ -343,6 +348,7 @@ app.get("/api/health", (req, res) => {
       provider: getGenAiProvider()
     },
     stt: { enabled: isSttEnabled() },
+    submissions: { enabled: Boolean(SUBMISSIONS_PATH) },
     // Lets a public build skip probing /api/settings, whose 404 reads as an error.
     settings: { enabled: !HIDE_SETTINGS },
     // Counters stay on the localhost-only /admin/live.json.
@@ -359,6 +365,29 @@ app.get("/api/health", (req, res) => {
     },
     wristPanelHand: { value: getWristPanelHand() }
   });
+});
+
+app.post("/api/submit", async (req, res) => {
+  if (!SUBMISSIONS_PATH) {
+    res.status(404).json({ error: "Submissions are off on this server" });
+    return;
+  }
+  const submission = normalizeSubmission(req.body);
+  if (!submission) {
+    res.status(400).json({ error: "A type and a query are required" });
+    return;
+  }
+  if (!takeSubmissionQuota(getSpendClientKey(req) || "unknown")) {
+    res.status(429).json({ error: "Too many submissions; try again later" });
+    return;
+  }
+  try {
+    await appendSubmission(SUBMISSIONS_PATH, submission);
+    res.status(204).end();
+  } catch (error) {
+    console.error(`Could not store a submission: ${error.message}`);
+    res.status(500).json({ error: "Could not store the submission" });
+  }
 });
 
 // Client XR diagnostics. The headset browser's console is hard to read
