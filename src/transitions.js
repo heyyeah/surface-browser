@@ -53,7 +53,7 @@ import {
 } from "./sphere.js";
 import { loadRequestByMode } from "./api.js";
 import { createHandGestureState } from "./xr-hand-gestures.js";
-import { stepAutoAdvanceIdle } from "./idle-auto-advance.js";
+import { stepAutoAdvanceIdle, stepUnattendedHops } from "./idle-auto-advance.js";
 import { isSettingsOpen } from "./settings.js";
 
 const SPHERE_PORTAL_REVEAL_PROGRESS = 0.42;
@@ -182,6 +182,7 @@ function prepareForTunnelRun() {
   state.pendingExitQuery = null;
   state.pendingExitMode = null;
   state.pendingExitSource = null;
+  state.pendingExitUnattended = false;
   // Single reset point for the img2img launch: any load that resets the cycle
   // supersedes an in-flight launch, whose import then drops its result instead of
   // handing a stale source to the run that took over.
@@ -244,6 +245,7 @@ function restartCycleFromCurrentQuery() {
   const nextQuery = (state.pendingExitQuery ?? state.currentQuery ?? "").trim();
   const nextMode = state.pendingExitMode || state.currentLoadMode || "url";
   const nextSource = state.pendingExitSource;
+  const nextUnattended = state.pendingExitUnattended;
   // Client-only origin label, read before prepareForTunnelRun clears the launch.
   const variationLabel = launch?.label || "";
   if (!nextQuery || state.cycleRequestInFlight) {
@@ -252,11 +254,13 @@ function restartCycleFromCurrentQuery() {
   state.pendingExitQuery = null;
   state.pendingExitMode = null;
   state.pendingExitSource = null;
+  state.pendingExitUnattended = false;
   prepareForTunnelRun();
   void loadRequestByMode({
     mode: nextMode,
     query: nextQuery,
     source: nextSource,
+    unattended: nextUnattended,
     variationLabel,
     resetTunnel: false,
     cycleReload: true
@@ -405,10 +409,30 @@ function updateStateMachine(dt) {
       // bar, which never touches the dwell.
       state.sphereDwellSeconds = 0;
     }
+    // The hosted piece also stops after a set number of paid hops nobody asked
+    // for (AUTO_ADVANCE_PAID_IDLE_HOPS): a headset wearer who only looks counts as
+    // idle, and each hop is a paid batch.
+    const unattended = stepUnattendedHops({
+      lastInputMs: state.lastUserInputAtMs,
+      sinceInputMs: state.unattendedHopsSinceInputMs,
+      hops: state.unattendedPaidHops,
+      limit: state.autoAdvancePaidIdleHops
+    });
+    state.unattendedHopsSinceInputMs = unattended.sinceInputMs;
+    state.unattendedPaidHops = unattended.hops;
+    const hopCapped = paidHop && unattended.capped;
+    if (hopCapped && !state.autoAdvanceHopCapped && !idle.suspended) {
+      setStatus(t("status.pausedGenerating"), "warning");
+    }
+    if (!hopCapped && state.autoAdvanceHopCapped) {
+      state.sphereDwellSeconds = 0;
+    }
+    state.autoAdvanceHopCapped = hopCapped;
+    const paused = idle.suspended || hopCapped;
 
     // The third freeze is the first-run overlay (onboarding.js), the fourth the
     // settings panel: the sphere waits rather than carrying the reader out.
-    if (!state.sphereInteractionHold && !state.sphereDwellHeldByOnboarding && !isSettingsOpen() && !idle.suspended) {
+    if (!state.sphereInteractionHold && !state.sphereDwellHeldByOnboarding && !isSettingsOpen() && !paused) {
       state.sphereDwellSeconds += dt;
     }
 
@@ -421,7 +445,7 @@ function updateStateMachine(dt) {
 
     // Belt and braces, as with sphereInteractionHold: the one branch that spends
     // money should not depend on the clock freeze alone.
-    if (state.sphereDwellSeconds >= SPHERE_DWELL_SECONDS && !idle.suspended) {
+    if (state.sphereDwellSeconds >= SPHERE_DWELL_SECONDS && !paused) {
       const nextRequest = getSphereNavigationRequest();
       if (!nextRequest) {
         state.sphereDwellSeconds = 0;
@@ -431,6 +455,10 @@ function updateStateMachine(dt) {
       state.pendingExitQuery = nextRequest.query;
       state.pendingExitMode = nextRequest.mode;
       state.pendingExitSource = nextRequest.source || null;
+      state.pendingExitUnattended = true;
+      if (paidHop) {
+        state.unattendedPaidHops += 1;
+      }
       state.followedLabel = { query: nextRequest.query, text: nextRequest.label || "" };
       startSphereExit();
     }

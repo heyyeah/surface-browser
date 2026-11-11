@@ -62,6 +62,7 @@ import {
   replaceSettingsOverrides,
   validateSettingsUpdate
 } from "./settings.js";
+import { createConcurrencyGuard } from "./concurrency-guard.js";
 import { extractCacheKey, handleExtract, isPlaywrightEnabled, readCachedExtract } from "./extract.js";
 import { handleImageSearch, initSearch, searchResultCache } from "./search.js";
 import {
@@ -91,7 +92,7 @@ import {
   poolMemberBytesTotal
 } from "./genai-pool-runtime.js";
 import {
-  genAiProgressJobs,
+  cancelAllGenAiProgressJobs,
   genAiResultCache,
   handleCancelGenAiJob,
   handleGenAi,
@@ -151,6 +152,8 @@ const IMAGE_PROXY_CONCURRENCY_MAX = parseNonNegativeInteger(process.env.IMAGE_PR
 // cannot take every slot. Raise both for a venue where everyone shares an IP.
 const SCRAPE_CONCURRENCY_PER_CLIENT = parseNonNegativeInteger(process.env.SCRAPE_CONCURRENCY_PER_CLIENT, 2);
 const IMAGE_PROXY_CONCURRENCY_PER_CLIENT = parseNonNegativeInteger(process.env.IMAGE_PROXY_CONCURRENCY_PER_CLIENT, 4);
+// How long an image request over the limit waits for a slot before the 503.
+const IMAGE_PROXY_SLOT_WAIT_MS = parseNonNegativeInteger(process.env.IMAGE_PROXY_SLOT_WAIT_MS, 1000);
 // Only for a guarded handler that never settles; normally the slot frees when it
 // returns. Longer than a fetch deadline plus a decode.
 const CONCURRENCY_SLOT_BACKSTOP_MS = 60_000;
@@ -272,7 +275,8 @@ function currentGitBuild(now = Date.now()) {
 
 const app = express();
 app.set("trust proxy", TRUST_PROXY);
-app.use("/api", loopbackBrowserGuard);
+// /admin too: its pages and JSON carry visitor data under the same loopback authority.
+app.use(["/api", "/admin"], loopbackBrowserGuard);
 app.use(cors(buildCorsOptions()));
 // Ahead of every body parser, deliberately: a capture is multiple megabytes, and
 // an unauthorised caller must not make this process buffer one before being
@@ -285,8 +289,15 @@ app.use("/api", liveMonitorMiddleware);
 app.use(["/api/extract", "/api/proxy/image", "/api/search/images", "/api/genai", "/api/stt", "/api/debug/xr", "/api/submit"], rateLimitRequests);
 // Separate pools, so page loads (and the renders inside them, seconds each) can
 // never use up the slots images need.
-const scrapeConcurrencyGuard = createConcurrencyGuard(SCRAPE_CONCURRENCY_MAX, SCRAPE_CONCURRENCY_PER_CLIENT);
-const imageProxyConcurrencyGuard = createConcurrencyGuard(IMAGE_PROXY_CONCURRENCY_MAX, IMAGE_PROXY_CONCURRENCY_PER_CLIENT);
+const scrapeConcurrencyGuard = createConcurrencyGuard(SCRAPE_CONCURRENCY_MAX, SCRAPE_CONCURRENCY_PER_CLIENT, {
+  clientKey: getSpendClientKey,
+  backstopMs: CONCURRENCY_SLOT_BACKSTOP_MS
+});
+const imageProxyConcurrencyGuard = createConcurrencyGuard(IMAGE_PROXY_CONCURRENCY_MAX, IMAGE_PROXY_CONCURRENCY_PER_CLIENT, {
+  waitMs: IMAGE_PROXY_SLOT_WAIT_MS,
+  clientKey: getSpendClientKey,
+  backstopMs: CONCURRENCY_SLOT_BACKSTOP_MS
+});
 const inFlightExtracts = createInFlightRequests();
 const inFlightProxyImages = createInFlightRequests();
 
@@ -330,30 +341,39 @@ app.get("/api/proxy/image", (req, res, next) => {
   next();
 });
 // Built-in Whisper is on by default and pins the CPU per request; one at a time.
-app.use("/api/stt", createConcurrencyGuard(parsePositiveInteger(process.env.STT_CONCURRENCY_MAX, 1)));
+app.use("/api/stt", createConcurrencyGuard(parsePositiveInteger(process.env.STT_CONCURRENCY_MAX, 1), 0, {
+  clientKey: getSpendClientKey,
+  backstopMs: CONCURRENCY_SLOT_BACKSTOP_MS
+}));
 setupStt(app, { killSwitch });
 
 app.get("/api/health", (req, res) => {
+  // Public callers get only what the client reads. The local block is for the box's
+  // own tools: `commit` is the checkout (what the client was built from, and whether
+  // a deploy landed); `running` is what this Node process booted at, which lags after
+  // a client-only deploy. In public, build would show which published fixes are not
+  // deployed yet, and the rest would advertise server internals to scanners.
+  const isLocal = isLocalRequest(req);
   res.json({
     ok: true,
-    service: "surface-browser-mvp-api",
-    // `commit` is the checkout (what the client was built from, and whether a deploy
-    // landed). `running` is what this Node process booted at; it lags after a
-    // client-only deploy, which does not restart. Local callers only: in public
-    // it would show which published fixes are not deployed yet.
-    ...(isLocalRequest(req) ? { build: { ...currentGitBuild(), running: GIT_BUILD_AT_BOOT.commit } } : {}),
-    playwright: isPlaywrightEnabled(),
+    ...(isLocal
+      ? {
+        service: "surface-browser-mvp-api",
+        build: { ...currentGitBuild(), running: GIT_BUILD_AT_BOOT.commit },
+        playwright: isPlaywrightEnabled(),
+        // Counters stay on the localhost-only /admin/live.json.
+        imageCache: { enabled: imageProxyCache.enabled },
+        genaiPromptCache: { enabled: genAiPromptCache.enabled }
+      }
+      : {}),
     genai: {
       enabled: isGenAiEnabled(),
-      provider: getGenAiProvider()
+      ...(isLocal ? { provider: getGenAiProvider() } : {})
     },
     stt: { enabled: isSttEnabled() },
     submissions: { enabled: Boolean(SUBMISSIONS_PATH) },
     // Lets a public build skip probing /api/settings, whose 404 reads as an error.
     settings: { enabled: !HIDE_SETTINGS },
-    // Counters stay on the localhost-only /admin/live.json.
-    imageCache: { enabled: imageProxyCache.enabled },
-    genaiPromptCache: { enabled: genAiPromptCache.enabled },
     statusFooter: { enabled: getBooleanSetting("SHOW_STATUS_FOOTER") },
     imageList: {
       enabled: getBooleanSetting("SHOW_IMAGE_LIST"),
@@ -361,7 +381,8 @@ app.get("/api/health", (req, res) => {
     },
     autoAdvance: {
       idleTimeoutMs: getIntegerSetting("AUTO_ADVANCE_IDLE_TIMEOUT_MS"),
-      freeIdleTimeoutMs: getIntegerSetting("AUTO_ADVANCE_FREE_IDLE_TIMEOUT_MS")
+      freeIdleTimeoutMs: getIntegerSetting("AUTO_ADVANCE_FREE_IDLE_TIMEOUT_MS"),
+      paidIdleHops: getIntegerSetting("AUTO_ADVANCE_PAID_IDLE_HOPS")
     },
     wristPanelHand: { value: getWristPanelHand() }
   });
@@ -481,7 +502,7 @@ app.put("/api/settings", (req, res) => {
     const nextOverrides = validateSettingsUpdate(req.body?.settings || req.body || {});
     replaceSettingsOverrides(nextOverrides);
     genAiResultCache.clear();
-    genAiProgressJobs.clear();
+    cancelAllGenAiProgressJobs();
     // A settings write can change the search provider or museum-safe mode, both
     // of which are baked into a cached result.
     searchResultCache.clear();
@@ -599,6 +620,7 @@ app.get("/api/proxy/image", holdSlotUntilSettled(async (req, res) => {
     if (sendPolicyError(res, err)) {
       return;
     }
+    logApiQuery("proxyImage.failed", { url: imageUrl, error: err.cause?.code || err.message });
     res.status(502).json({ error: `Image proxy failed: ${err.message}` });
   }
 }));
@@ -1117,56 +1139,6 @@ function lookupCountry(address) {
   } catch {
     return "";
   }
-}
-
-function createConcurrencyGuard(max, perClientMax = 0) {
-  let active = 0;
-  const activeByClient = new Map();
-  return function concurrencyGuard(req, res, next) {
-    if (!max) {
-      next();
-      return;
-    }
-    const client = getSpendClientKey(req);
-    const clientActive = activeByClient.get(client) || 0;
-    if (active >= max || (perClientMax && clientActive >= perClientMax)) {
-      res.setHeader("retry-after", "1");
-      res.status(503).json({ error: "Server busy, try again shortly" });
-      return;
-    }
-    active += 1;
-    activeByClient.set(client, clientActive + 1);
-    let released = false;
-    const release = () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      active = Math.max(0, active - 1);
-      const remaining = (activeByClient.get(client) || 1) - 1;
-      if (remaining > 0) {
-        activeByClient.set(client, remaining);
-      } else {
-        activeByClient.delete(client);
-      }
-    };
-    // The slot is held until the admitted work ends, not until the client goes:
-    // a disconnect leaves the fetch and decode running, so releasing on 'close'
-    // let a client that kept disconnecting stack work past the ceiling. Guarded
-    // handlers are wrapped in holdSlotUntilSettled, which releases when they
-    // return. A client that leaves before its handler starts (mid-upload) frees
-    // the slot at once; otherwise 'close' only arms a backstop.
-    res.once("finish", release);
-    res.once("close", () => {
-      if (!res.locals.concurrencyWorkStarted) {
-        release();
-      } else if (!released) {
-        setTimeout(release, CONCURRENCY_SLOT_BACKSTOP_MS).unref();
-      }
-    });
-    res.locals.releaseConcurrencySlot = release;
-    next();
-  };
 }
 
 function holdSlotUntilSettled(handler) {

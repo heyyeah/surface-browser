@@ -591,7 +591,8 @@ function applyGenAiProgressPayload({
   const done = payload.done === true || payload.meta?.complete === true || payload.status === "complete";
   state.genAiBatchReceived = received;
   state.genAiBatchExpected = expected;
-  state.genAiBatchComplete = done && (expected <= 0 || received >= expected);
+  // "complete" is terminal: a short batch must still end the tunnel, not poll on.
+  state.genAiBatchComplete = payload.status === "complete" || (done && (expected <= 0 || received >= expected));
 
   renderResults(nextItems, payload.meta?.method || "genai", payload.meta?.warnings || []);
   extractLabel.textContent = `Source: ${payload.sourceUrl || resolvedQuery}`;
@@ -627,10 +628,6 @@ function applyGenAiProgressPayload({
         cacheKey: payload.meta?.genaiCacheKey || null
       });
       remembered = true;
-    }
-    if (!state.genAiBatchComplete) {
-      setStatus(t("status.generatingProgress", { progress: `${received}/${expected || "?"}` }));
-      return { done: false, ok: false, lastItemCount: nextItems.length, remembered };
     }
     setAddressFeedback(null);
     setStatus(t("status.loadedGenerated", { count: nextItems.length }), true);
@@ -720,6 +717,8 @@ async function loadGenAiPrompt({
   source = null,
   cacheKey = null,
   seed = null,
+  // Started by the dwell with nobody touching anything: the server buys fewer.
+  unattended = false,
   // Client-only short origin label for an img2img run started from a selected image
   // (see sphere.js). Never sent to the server.
   variationLabel = "",
@@ -783,7 +782,8 @@ async function loadGenAiPrompt({
         cacheKey,
         async: true,
         // The server owns count/settings; no client-side batching.
-        seed
+        seed,
+        ...(unattended ? { unattended: true } : {})
       })
     });
     const payload = await response.json();
@@ -915,6 +915,7 @@ async function loadRequestByMode({
   query,
   source = null,
   cacheKey = null,
+  unattended = false,
   variationLabel = "",
   resetTunnel = true,
   cycleReload = false,
@@ -932,6 +933,7 @@ async function loadRequestByMode({
       query,
       source,
       cacheKey,
+      unattended,
       variationLabel,
       resetTunnel,
       cycleReload,
@@ -1041,6 +1043,7 @@ async function goBack() {
   state.pendingExitQuery = null;
   state.pendingExitMode = null;
   state.pendingExitSource = null;
+  state.pendingExitUnattended = false;
   if (previous.mode === "image_search") {
     return loadImageSearch({
       query: previous.query,

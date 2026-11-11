@@ -204,6 +204,58 @@ test("loopback guard: a foreign page cannot use the local API through the develo
   }
 });
 
+test("loopback guard: /admin pages and JSON refuse a rebound or cross-site page too", async () => {
+  const server = await startServer({ ...CLEAN });
+  try {
+    for (const route of ["/admin/live", "/admin/live.json", "/admin/queries.json", "/admin/generated.json"]) {
+      assert.equal((await rawGet(server.port, route, { host: "evil.test:8788" })).status, 403, route);
+      assert.equal((await rawGet(server.port, route, { host: `localhost:${server.port}`, "sec-fetch-site": "cross-site" })).status, 403, route);
+    }
+    assert.equal((await rawGet(server.port, "/admin/live.json", { host: `localhost:${server.port}` })).status, 200);
+  } finally {
+    await server.stop();
+  }
+});
+
+test("provider errors reach visitors without endpoint credentials or echoed keys", async () => {
+  const { assertTargetUrlAllowed, fetchWithTimeout, readErrorResponseDetail } = await import("../server/net-policy.js");
+  await assert.rejects(
+    assertTargetUrlAllowed("http://user:pw-secret@127.0.0.1:9/x", { applyHostAllowlist: false, allowPrivateAddress: true, allowNonStandardPort: true }),
+    (err) => !String(err.message).includes("pw-secret")
+  );
+  // A provider whose error page echoes the request's credentials back.
+  const echo = http.createServer((req, res) => {
+    res.writeHead(500, { "content-type": "text/plain" });
+    res.end(`Traceback: auth=${req.headers.authorization}`);
+  });
+  await new Promise((resolve) => echo.listen(0, "127.0.0.1", resolve));
+  try {
+    const response = await fetchWithTimeout(`http://127.0.0.1:${echo.address().port}/`, {
+      headers: { authorization: "Bearer DUMMY_KEY_0123456789" }
+    }, 5000, { applyHostAllowlist: false, allowPrivateAddress: true, allowNonStandardPort: true });
+    const detail = await readErrorResponseDetail(response);
+    assert.match(detail, /Traceback/);
+    assert.ok(!detail.includes("DUMMY_KEY_0123456789"), detail);
+  } finally {
+    echo.close();
+  }
+});
+
+test("settings: endpoint URLs with credentials are refused", async () => {
+  const server = await startServer({ ...CLEAN });
+  try {
+    const res = await fetch(`${server.base}/api/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ GENAI_ENDPOINT: "http://user:pw@127.0.0.1:7860" })
+    });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /credentials/);
+  } finally {
+    await server.stop();
+  }
+});
+
 test("loopback guard: proxied visitors are not judged by Host, the tunnelled operator still is", async () => {
   const server = await startServer({ ...CLEAN, TRUST_PROXY: "1", CORS_ALLOWED_ORIGINS: "https://vr.example.org" });
   try {
@@ -985,5 +1037,38 @@ test("/api/health names the commit only to local callers", async () => {
     assert.ok(local.build, "a local caller still sees the build");
   } finally {
     await server.stop();
+  }
+});
+
+test("npm install scripts: every lockfile package with one is reviewed, and the policy fails closed", () => {
+  const root = path.join(SCRIPTS_DIR, "..");
+  const allow = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).allowScripts ?? {};
+  const lock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json"), "utf8"));
+  const unreviewed = Object.entries(lock.packages)
+    .filter(([, meta]) => meta.hasInstallScript)
+    .map(([key]) => key.replace(/^.*node_modules\//, ""))
+    .filter((name) => !(name in allow));
+  assert.deepEqual(unreviewed, []);
+  assert.match(fs.readFileSync(path.join(root, ".npmrc"), "utf8"), /^strict-allow-scripts=true$/m);
+});
+
+test("DNS: at most 8 lookups run at once; the rest queue for a free slot", async () => {
+  const dns = (await import("node:dns/promises")).default;
+  const { assertTargetUrlAllowed } = await import("../server/net-policy.js");
+  const original = dns.lookup;
+  const pending = [];
+  dns.lookup = () => new Promise((resolve) => pending.push(resolve));
+  try {
+    const checks = Array.from({ length: 9 }, (_, i) => assertTargetUrlAllowed(`https://h${i}.example/`));
+    await new Promise((r) => setImmediate(r));
+    assert.equal(pending.length, 8);
+    pending[0]([{ address: "93.184.215.14", family: 4 }]);
+    await checks[0];
+    await new Promise((r) => setImmediate(r));
+    assert.equal(pending.length, 9);
+    for (const resolve of pending.slice(1)) resolve([{ address: "93.184.215.14", family: 4 }]);
+    await Promise.all(checks);
+  } finally {
+    dns.lookup = original;
   }
 });

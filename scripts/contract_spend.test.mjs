@@ -94,6 +94,30 @@ test("/api/health names the commit it is serving", { skip: !HAS_GIT_DIR }, async
   }
 });
 
+test("/api/health shows public callers only what the client reads", async () => {
+  const server = await startServer({ ...CLEAN });
+  try {
+    // The header narrows trust: this is how a non-local caller looks through a proxy.
+    const reply = await fetch(`${server.base}/api/health`, {
+      headers: { "x-surface-dev-client": "203.0.113.9" }
+    });
+    const health = await reply.json();
+    assert.equal(health.ok, true);
+    for (const field of ["service", "build", "playwright", "imageCache", "genaiPromptCache"]) {
+      assert.equal(field in health, false, `${field} must stay local`);
+    }
+    assert.equal("provider" in health.genai, false);
+    assert.equal(typeof health.genai.enabled, "boolean");
+    assert.equal(typeof health.settings.enabled, "boolean");
+
+    const local = await (await fetch(`${server.base}/api/health`)).json();
+    assert.equal(typeof local.playwright, "boolean");
+    assert.equal(typeof local.genai.provider, "string");
+  } finally {
+    await server.stop();
+  }
+});
+
 test("the checkout sha is re-read, not frozen at boot", { skip: !HAS_GIT_DIR }, async () => {
   const serverSource = fs.readFileSync(new URL("../server/index.js", import.meta.url), "utf8");
   // The boot value must stay a constant, and the checkout value must not be one.
@@ -883,6 +907,81 @@ test("genai: result-cache and prompt-cache replays are served when the daily cap
     assert.equal((await repeat.json()).meta.cached, true);
     assert.equal(fal.calls(), 1, "neither replay called the provider");
     assert.equal(await genAiImagesUsed(server), 1);
+  } finally {
+    await server.stop();
+    await fal.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("genai async: a batch with an empty slot completes as done, not complete-but-waiting", async () => {
+  const dir = tempDir();
+  const fal = await startScriptedFal((call, res) => {
+    if (call === 2) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ images: [], seed: 1 }));
+      return;
+    }
+    sendFalImage(res);
+  });
+  const server = await falServer(fal, dir);
+  try {
+    const start = await genaiAs(server, "visitor", { prompt: "otters", count: 3, async: true });
+    assert.equal(start.status, 202);
+    const { jobId } = await start.json();
+    let job;
+    await waitFor(async () => {
+      job = await (await fetch(`${server.base}/api/genai/job/${jobId}`)).json();
+      return job.status === "complete";
+    }, "the job to complete");
+    assert.equal(job.received, 2);
+    assert.equal(job.expected, 2);
+    assert.equal(job.done, true);
+  } finally {
+    await server.stop();
+    await fal.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("genai async: engaging the kill switch stops a running batch after the image in flight", async () => {
+  const dir = tempDir();
+  const killPath = path.join(dir, "KILL_SWITCH");
+  const fal = await startHeldSecondCallFal();
+  const server = await falServer(fal, dir, { KILL_SWITCH_PATH: killPath, KILL_SWITCH_CACHE_MS: "50" });
+  try {
+    const start = await genaiAs(server, "visitor", { prompt: "otters", count: 4, async: true });
+    const { jobId } = await start.json();
+    await waitFor(async () => fal.held() === 1 && await jobItems(server, jobId) === 1, "image 1 and call 2 in flight");
+    fs.writeFileSync(killPath, "");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    fal.release();
+    await waitFor(async () => (await (await fetch(`${server.base}/api/genai/job/${jobId}`)).json()).status === "cancelled", "the job to stop");
+    assert.equal(fal.calls(), 2, "no image is requested after the switch");
+  } finally {
+    await server.stop();
+    await fal.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("genai async: cancelling a queued job frees its queue slot for another visitor", async () => {
+  const dir = tempDir();
+  const held = [];
+  const fal = await startScriptedFal((_call, res) => held.push(res));
+  const server = await falServer(fal, dir, { GENAI_PARALLEL_JOBS: "1", GENAI_QUEUE_MAX_PENDING: "1" });
+  try {
+    await genaiAs(server, "a", { prompt: "otters", count: 1, async: true });
+    await waitFor(() => held.length === 1, "the active call");
+    const queued = await (await genaiAs(server, "b", { prompt: "badgers", count: 1, async: true })).json();
+    const cancelled = await fetch(`${server.base}/api/genai/job/${queued.jobId}`, { method: "DELETE" });
+    assert.equal((await cancelled.json()).status, "cancelled");
+
+    const next = await genaiAs(server, "c", { prompt: "stoats", count: 1, async: true });
+    assert.equal(next.status, 202, "the cancelled job no longer holds the only pending slot");
+    held.forEach(sendFalImage);
+    await waitFor(() => held.length === 2, "c's call after a's");
+    held.slice(1).forEach(sendFalImage);
   } finally {
     await server.stop();
     await fal.stop();

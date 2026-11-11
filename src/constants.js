@@ -24,7 +24,7 @@ export const IMAGE_SPAWN_MAX_INTERVAL_MS = 1300;
 export const IMAGE_SPAWN_MAX_LOADS_IN_FLIGHT = 3;
 export const MAX_PANELS = 15;
 export const SPHERE_IMAGE_COUNT = 8;
-export const SPHERE_DWELL_SECONDS = 20;
+export const SPHERE_DWELL_SECONDS = 35;
 // A new panel takes the gaze selection only once it is this much nearer the view
 // centre than the selected one.
 export const SPHERE_SELECTION_HYSTERESIS_RAD = 1.5 * Math.PI / 180;

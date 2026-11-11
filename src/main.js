@@ -1,6 +1,6 @@
 import "./styles.css";
 import { AppState, SPHERE_EXIT_ACCEL, SPHERE_EXIT_MAX_SPEED } from "./constants.js";
-import { DEV_TOOLS_ENABLED, MIC_PREWARM_ENABLED, PASSTHROUGH_ENABLED } from "./config.js";
+import { DEV_TOOLS_ENABLED, MIC_PREWARM_ENABLED, PASSTHROUGH_ENABLED, SHOW_FPS } from "./config.js";
 import { state } from "./state.js";
 import { easeTunnelSpeed } from "./tunnel-run.js";
 import {
@@ -122,6 +122,7 @@ import { t, initLanguage, setLanguage, getLanguage, SUPPORTED_LANGUAGES, LANGUAG
 import { createOnboardingState, stepOnboarding, onboardingRowKeys } from "./onboarding.js";
 import { setupHandPresence, setupControllerPresence } from "./hands.js";
 import { setWristPanelHand, updateWristLauncher } from "./wristui.js";
+import { tickFpsMeter } from "./fps-meter.js";
 import { updateControllerCallouts } from "./controller-callouts.js";
 import { setSubmissionsEnabled } from "./submissions.js";
 import {
@@ -1037,6 +1038,9 @@ function renderFrame() {
   // After updatePassthrough(), which may have pushed the fog out of range.
   updateTunnelDrawRange();
   updateStatusFooter();
+  if (SHOW_FPS) {
+    tickFpsMeter(renderer, scene);
+  }
   renderer.render(scene, camera);
   updatePerfLabel();
 }
@@ -1197,6 +1201,7 @@ async function configureApiCapabilities(preloaded = null) {
       capabilities.autoAdvance?.freeIdleTimeoutMs,
       AUTO_ADVANCE_FREE_IDLE_TIMEOUT_DEFAULT_MS
     );
+    state.autoAdvancePaidIdleHops = Math.max(0, Math.floor(Number(capabilities.autoAdvance?.paidIdleHops) || 0));
     setWristPanelHand(capabilities.wristPanelHand?.value);
     renderStartPanel();
     renderShortcutsMenu();
@@ -1252,11 +1257,12 @@ if (startupAutoQuery) {
 renderStartPanel();
 
 // ?url= / ?search= / ?prompt= open straight into that request: /admin/queries
-// links each row here.
+// links each row here. Top-level only: another site could frame these hidden and
+// spend its visitors' GenAI allowance (and the daily cap) without a click.
 const startupRequest = [["url", "url"], ["search", "image_search"], ["prompt", "genai"]]
   .map(([param, mode]) => ({ mode, query: (startupParams.get(param) || "").trim() }))
   .find((request) => request.query);
-if (startupRequest && !startupAutoQuery) {
+if (startupRequest && !startupAutoQuery && window.top === window.self) {
   setActiveOmnibarMode(startupRequest.mode);
   urlInput.value = startupRequest.query;
   hideStartPanel();

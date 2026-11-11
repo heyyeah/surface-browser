@@ -32,7 +32,8 @@ import {
 import { buildTunnel, sampleAlongPath } from "./tunnel-geometry.js";
 import { buildCurvedPlaneGeometry } from "./curved-plane-geometry.js";
 import { disposeMaterial } from "./helpers.js";
-import { DEBUG_UI, TUNNEL_CLIP_ALWAYS, TUNNEL_RINGS_OVERRIDE, TUNNEL_WALL_OPAQUE, TUNNEL_WALL_UNLIT } from "./config.js";
+import { DEBUG_UI, TUNNEL_CLIP_ALWAYS, TUNNEL_RINGS_OVERRIDE, TUNNEL_WALL_OPAQUE, TUNNEL_WALL_UNLIT, TUNNEL_WATER } from "./config.js";
+import { applyProceduralWater, tickProceduralWater } from "./tunnel-water.js";
 import { setStatus } from "./ui.js";
 
 const TUNNEL_WRAP_START_RING = 5;
@@ -98,6 +99,11 @@ const keepAllClipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 1e6);
 const idleClipPlanes = () => (TUNNEL_CLIP_ALWAYS ? [keepAllClipPlane] : null);
 
 function buildTunnelMaterial() {
+  const material = buildTunnelBaseMaterial();
+  return TUNNEL_WATER ? applyProceduralWater(material, TUNNEL_WATER) : material;
+}
+
+function buildTunnelBaseMaterial() {
   const shared = {
     clippingPlanes: idleClipPlanes(),
     map: tunnelTexture,
@@ -162,6 +168,9 @@ function rebuildTunnel() {
   state.lastSpawnedPanelRing = state.currentRingFloat + 20;
 
   state.tunnelMesh = new THREE.Mesh(built.geometry, buildTunnelMaterial());
+  if (TUNNEL_WATER) {
+    state.tunnelMesh.onBeforeRender = () => tickProceduralWater(performance.now() / 1000);
+  }
   worldGroup.add(state.tunnelMesh);
 
   // "Tunnel rebuilt (N rings, M segments)" is a dev diagnostic that would leak

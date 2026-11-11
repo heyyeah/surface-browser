@@ -1,5 +1,15 @@
-import { load as loadHtml } from "cheerio";
-import { PLACEHOLDER_IMAGE_NAME, TINY_DECLARED_EDGE_PX, declaredImageEdge, isPlaceholderImageUrl, isStandInImageSource } from "./image-url-filters.js";
+import { PLACEHOLDER_IMAGE_NAME } from "./image-url-filters.js";
+import {
+  CARD_LINK_MAX_DEPTH,
+  MAX_LINKS_PER_IMAGE,
+  RENDER_MAX_TEXT_CHARS,
+  RENDER_MAX_URL_CHARS,
+  imageLabel,
+  isAllowedImageUrl,
+  isAllowedLink,
+  passesDimensionHeuristic
+} from "./html-images.js";
+import { parseHtmlForImagesOffThread } from "./html-parse-pool.js";
 import { hasNavigableUrlShape } from "../shared/url-shape.js";
 import { clampNumber, parseNonNegativeInteger, parsePositiveInteger } from "./env.js";
 import { RequestPolicyError, sendPolicyError } from "./errors.js";
@@ -69,15 +79,6 @@ function releaseRenderSlot() {
     activeRenders = Math.max(0, activeRenders - 1);
   }
 }
-
-const EXCLUDED_CONTENT_EXTENSIONS = new Set([
-  ".asf", ".avi", ".flv", ".m4v", ".mkv", ".mov", ".mp4", ".mpg", ".mpeg", ".swf", ".webm", ".wmv",
-  ".atom", ".feed", ".rss", ".xml",
-  ".csv", ".doc", ".docx", ".epub", ".odt", ".pdf", ".ppt", ".pptx", ".rtf", ".txt", ".xls", ".xlsx",
-  ".7z", ".gz", ".rar", ".tar", ".zip",
-  ".css", ".js", ".json", ".sql", ".yaml", ".yml",
-  ".dll", ".exe", ".ico", ".iso", ".msi"
-]);
 
 // Every extracted page is cached, typed URLs included, so a news page can be up
 // to EXTRACT_CACHE_TTL_MS stale. 0 disables. In memory, so a restart empties it;
@@ -164,6 +165,51 @@ function rememberRenderUseless(url) {
   }
 }
 
+// The last good render of each page, kept after its extract-cache entry expires,
+// for when the renderer is busy: a week-old render beats the plain-HTML result
+// the visitor would otherwise get. In memory only (Tim, 2026-11-11).
+const RENDER_KEEP_TTL_MS = parseNonNegativeInteger(process.env.RENDER_KEEP_TTL_MS, 7 * 24 * 60 * 60 * 1000);
+const RENDER_KEEP_MAX_ENTRIES = 300;
+const RENDER_KEEP_MAX_BYTES = 16 * 1024 * 1024;
+const keptRenders = new Map();
+let keptRenderBytes = 0;
+
+function dropKeptRender(url) {
+  const kept = keptRenders.get(url);
+  if (kept) {
+    keptRenders.delete(url);
+    keptRenderBytes -= kept.bytes;
+  }
+}
+
+function keepRender(url, result) {
+  if (!RENDER_KEEP_TTL_MS || !result?.items.length) {
+    return;
+  }
+  const bytes = Buffer.byteLength(JSON.stringify(result));
+  if (bytes > EXTRACT_CACHE_MAX_ENTRY_BYTES) {
+    return;
+  }
+  dropKeptRender(url);
+  keptRenders.set(url, { result, bytes, renderedAt: Date.now() });
+  keptRenderBytes += bytes;
+  while (keptRenders.size > RENDER_KEEP_MAX_ENTRIES || keptRenderBytes > RENDER_KEEP_MAX_BYTES) {
+    dropKeptRender(keptRenders.keys().next().value);
+  }
+}
+
+function readKeptRender(url) {
+  const kept = keptRenders.get(url);
+  if (!kept) {
+    return null;
+  }
+  if (Date.now() - kept.renderedAt > RENDER_KEEP_TTL_MS) {
+    dropKeptRender(url);
+    return null;
+  }
+  return kept;
+}
+
 function linkedItemCount(result) {
   return result ? result.items.filter((item) => item.linkUrl).length : 0;
 }
@@ -219,16 +265,23 @@ export async function handleExtract(req, res) {
     res.locals.releaseConcurrencySlot?.();
     rendering = await acquireRenderSlot(res);
     if (!rendering) {
-      // A day of the HTML-only result is the wrong thing to remember.
+      // A day of the HTML-only (or kept) result is the wrong thing to remember.
       cacheKey = null;
-      warnings.push("Render skipped: the renderer is busy");
-      logApiQuery("extract.renderBusy", { url: sourceUrl });
+      const kept = fallbackMode === "auto" ? readKeptRender(sourceUrl) : null;
+      if (kept) {
+        fallback = kept.result;
+        warnings.push(`Renderer busy: using a render from ${Math.round((Date.now() - kept.renderedAt) / 60000)} min ago`);
+      } else {
+        warnings.push("Render skipped: the renderer is busy");
+      }
+      logApiQuery("extract.renderBusy", { url: sourceUrl, kept: Boolean(kept) });
     }
   }
   if (rendering) {
     try {
       fallback = await extractViaPlaywright(sourceUrl, limit);
       if (chooseResult(primary, fallback) === fallback) {
+        keepRender(sourceUrl, fallback);
         warnings.push(primary ? "Using fallback extraction result" : "Primary unavailable; using fallback extraction");
       } else {
         warnings.push("Fallback extraction was no better; keeping primary result");
@@ -341,233 +394,12 @@ async function extractViaHtmlFetch(sourceUrl, limit) {
     throw new Error(`HTTP ${response.status}`);
   }
   const html = (await readResponseBuffer(response)).toString("utf8");
-  const parsed = parseHtmlForImages(html, sourceUrl, limit);
+  const parsed = await parseHtmlForImagesOffThread(html, sourceUrl, limit);
   return {
     title: parsed.title,
     items: parsed.items,
     method: "html_fetch"
   };
-}
-
-function parseHtmlForImages(html, sourceUrl, limit) {
-  const $ = loadHtml(html);
-  const title = $("title").first().text().trim() || sourceUrl;
-  const items = [];
-  const seenImages = new Map();
-
-  $("img").each((_, img) => {
-    if (items.length >= limit * 3) {
-      return false;
-    }
-
-    const srcCandidate = pickImageSource($, img);
-    if (!srcCandidate) {
-      return;
-    }
-
-    const imageUrl = resolveUrl(srcCandidate, sourceUrl);
-    if (!imageUrl || !isAllowedImageUrl(imageUrl)) {
-      return;
-    }
-
-    const linkHref = $(img).closest("a").attr("href");
-    const resolvedLink = linkHref
-      ? resolveUrl(linkHref, sourceUrl)
-      : cardLinkFor($, img, sourceUrl);
-    const linkUrl = resolvedLink && isAllowedLink(resolvedLink) ? resolvedLink : null;
-    const width = parseDimension($(img).attr("width"));
-    const height = parseDimension($(img).attr("height"));
-
-    if (isDuplicateImageReference(imageUrl, linkUrl, seenImages)) {
-      return;
-    }
-
-    if (!passesDimensionHeuristic(imageUrl, linkUrl, width, height)) {
-      return;
-    }
-
-    const anchor = $(img).closest("a");
-    items.push({
-      imageUrl,
-      linkUrl,
-      width,
-      height,
-      alt: imageLabel($(img).attr("alt") || anchor.attr("title") || anchor.attr("aria-label"))
-    });
-  });
-
-  return { title, items: items.slice(0, limit) };
-}
-
-// The card link: many sites put the image beside the story link and stretch
-// that link over the whole card with CSS, so the image has no <a> ancestor even
-// though clicking it follows the story. Walk up a few levels to the nearest
-// container holding exactly one distinct link and use it; a container with
-// several different links is a list of stories, not a card, so the walk stops
-// there. Mirrored in extractViaPlaywright().
-const CARD_LINK_MAX_DEPTH = 4;
-// What a render may hand back per string. Longer URLs are dropped, not cut: a
-// cut URL would fetch something else.
-const RENDER_MAX_URL_CHARS = 4096;
-const RENDER_MAX_TEXT_CHARS = 1000;
-
-// A page's alt text is its author's to make huge; this is a caption.
-function imageLabel(text) {
-  return String(text || "").replace(/\s+/g, " ").trim().slice(0, 160);
-}
-
-function cardLinkFor($, img, sourceUrl) {
-  let el = $(img).parent();
-  for (let depth = 0; depth < CARD_LINK_MAX_DEPTH && el.length; depth += 1) {
-    const links = new Set();
-    el.find("a[href]").each((_, a) => {
-      const href = $(a).attr("href");
-      if (href && !href.startsWith("#")) {
-        const resolved = resolveUrl(href, sourceUrl);
-        if (resolved) {
-          links.add(resolved);
-        }
-      }
-    });
-    if (links.size === 1) {
-      return links.values().next().value;
-    }
-    if (links.size > 1) {
-      return null;
-    }
-    el = el.parent();
-  }
-  return null;
-}
-
-// Lazy-loading pages put a stand-in (a grey PNG, a 1px GIF, a data: URI) in
-// `src` and the real image in data-src or srcset, so a stand-in loses to them.
-function pickImageSource($, img) {
-  const srcSet = $(img).attr("srcset");
-  const candidates = [$(img).attr("src"), $(img).attr("data-src"), srcSet?.split(",")[0]?.trim().split(" ")[0]]
-    .map((value) => value?.trim())
-    .filter(Boolean);
-  return candidates.find((value) => !isStandInImageSource(value)) || candidates[0] || null;
-}
-
-export function parseDimension(value) {
-  if (!value) {
-    return null;
-  }
-  const parsed = Number(String(value).replace(/[^\d.]/g, ""));
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return null;
-  }
-  return Math.round(parsed);
-}
-
-function resolveUrl(candidate, baseUrl) {
-  if (!candidate) {
-    return null;
-  }
-  try {
-    return new URL(candidate, baseUrl).toString();
-  } catch {
-    return null;
-  }
-}
-
-export function isAllowedImageUrl(imageUrl) {
-  try {
-    const parsed = new URL(imageUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return false;
-    }
-    const ext = fileExtension(parsed.pathname);
-    if (ext && EXCLUDED_CONTENT_EXTENSIONS.has(ext)) {
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function isAllowedLink(linkUrl) {
-  try {
-    const parsed = new URL(linkUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return false;
-    }
-    const ext = fileExtension(parsed.pathname);
-    return !(ext && EXCLUDED_CONTENT_EXTENSIONS.has(ext));
-  } catch {
-    return false;
-  }
-}
-
-function fileExtension(pathname) {
-  const idx = pathname.lastIndexOf(".");
-  if (idx < 0) {
-    return null;
-  }
-  return pathname.slice(idx).toLowerCase();
-}
-
-export function passesDimensionHeuristic(imageUrl, linkUrl, width, height) {
-  const linked = Boolean(linkUrl) && linkUrl !== imageUrl;
-  if (isLikelyFaviconUrl(imageUrl) || isPlaceholderImageUrl(imageUrl)) {
-    return false;
-  }
-  const declared = declaredImageEdge(imageUrl);
-  if (declared !== null && declared <= TINY_DECLARED_EDGE_PX) {
-    return false;
-  }
-  if (width === null || height === null) {
-    // An unlinked SVG with no size is almost always a CSS-sized library icon. A
-    // linked one may be navigation; the proxy refuses it if its own size is
-    // icon-small (SVG_MIN_EDGE_PX in images.js).
-    return linked || !isSvgUrl(imageUrl);
-  }
-  const minDim = linked ? 24 : 128;
-  return width > minDim && height > minDim;
-}
-
-function isSvgUrl(imageUrl) {
-  try {
-    return /\.svgz?$/i.test(new URL(imageUrl).pathname) || /^data:image\/svg/i.test(imageUrl);
-  } catch {
-    return false;
-  }
-}
-
-function isLikelyFaviconUrl(imageUrl) {
-  try {
-    const parsed = new URL(imageUrl);
-    return /(^|\/)favicon(?:[-_.][^/]*)?\.(?:ico|png|gif|jpe?g|webp)$/i.test(parsed.pathname);
-  } catch {
-    return false;
-  }
-}
-
-// As the Java original: an image repeated under different links (a nav icon,
-// a "more" arrow) is kept for its first MAX_LINKS_PER_IMAGE links only.
-const MAX_LINKS_PER_IMAGE = 2;
-
-export function isDuplicateImageReference(imageUrl, linkUrl, seenImages) {
-  const linked = Boolean(linkUrl) && linkUrl !== imageUrl;
-  let seen = seenImages.get(imageUrl);
-  if (!seen) {
-    seen = { unlinked: false, links: new Set() };
-    seenImages.set(imageUrl, seen);
-  }
-  if (!linked) {
-    if (seen.unlinked) {
-      return true;
-    }
-    seen.unlinked = true;
-    return false;
-  }
-  if (seen.links.has(linkUrl) || seen.links.size >= MAX_LINKS_PER_IMAGE) {
-    return true;
-  }
-  seen.links.add(linkUrl);
-  return false;
 }
 
 const PLAYWRIGHT_SCROLL_STEPS = 4;
@@ -579,6 +411,16 @@ const PLAYWRIGHT_IDLE_CLOSE_MS = 60000;
 // Each sub-request is buffered in Node (up to MAX_RESPONSE_BYTES) before it is
 // fulfilled, and a page can fire hundreds at once.
 const PLAYWRIGHT_UPSTREAM_CONCURRENCY = 6;
+
+// The desktop app's renderer (desktop/page-renderer.mjs) uses these too, so both
+// render paths scroll, wait and give up alike.
+export const RENDER_TIMINGS = Object.freeze({
+  scrollSteps: PLAYWRIGHT_SCROLL_STEPS,
+  scrollWaitMs: PLAYWRIGHT_SCROLL_WAIT_MS,
+  settleMaxMs: PLAYWRIGHT_SETTLE_MS,
+  deadlineMs: PLAYWRIGHT_RENDER_DEADLINE_MS,
+  maxInFlight: PLAYWRIGHT_UPSTREAM_CONCURRENCY
+});
 
 export function isPlaywrightEnabled() {
   return process.env.PLAYWRIGHT_ENABLED !== "0";
@@ -608,6 +450,10 @@ async function fetchForRender(url, { method, headers, body }) {
 async function extractViaPlaywright(sourceUrl, limit) {
   if (!isPlaywrightEnabled()) {
     throw new Error("PLAYWRIGHT_ENABLED=0");
+  }
+  if (externalPageRenderer) {
+    const { title, items } = await externalPageRenderer(sourceUrl, { limit, fetchUpstream: fetchForRender });
+    return finishRenderedExtraction(sourceUrl, limit, title, items);
   }
 
   const browser = await sharedChromium.acquire();
@@ -674,99 +520,127 @@ async function extractViaPlaywright(sourceUrl, limit) {
     // size and fails the size filter, which made the count vary with network timing.
     await page.waitForLoadState("networkidle", { timeout: PLAYWRIGHT_SETTLE_MS }).catch(() => {});
 
-    const { title, items } = await page.evaluate(({ cap, maxDepth, maxLinksPerImage, maxUrl, maxText, standInSource }) => {
-      // Every string goes through the init script's clip (playwright-render.js),
-      // and `out` grows by index, not push: the page may have patched both.
-      const clip = window.__sbClip;
-      if (typeof clip !== "function") {
-        return { title: "", items: [] };
-      }
-      // A page could patch RegExp; the worst it gets is its own stand-in chosen,
-      // which passesDimensionHeuristic() then drops.
-      const standIn = new RegExp(standInSource, "i");
-      const url = (value) => (clip(value, maxUrl + 1).length > maxUrl ? "" : clip(value, maxUrl));
-      // cardLinkFor(), in the page.
-      const cardLink = (img) => {
-        let el = img.parentElement;
-        for (let depth = 0; depth < maxDepth && el; depth += 1) {
-          const links = new Set();
-          for (const a of el.querySelectorAll("a[href]")) {
-            if (!clip(a.getAttribute("href"), 1).startsWith("#")) {
-              links.add(url(a.href));
-            }
-          }
-          if (links.size === 1) {
-            return [...links][0];
-          }
-          if (links.size > 1) {
-            return null;
-          }
-          el = el.parentElement;
-        }
-        return null;
-      };
-      const out = [];
-      const seen = new Set();
-      const linkCounts = new Map();
-      for (const img of document.querySelectorAll("img")) {
-        if (out.length >= cap * 3) {
-          break;
-        }
-
-        // As pickImageSource(): a lazy page's stand-in loses to the real image.
-        const sources = [img.currentSrc, img.src, img.getAttribute("src"), img.getAttribute("data-src")].map(url).filter(Boolean);
-        const imageUrl = sources.find((value) => !standIn.test(value.split(/[?#]/)[0].split("/").pop())) || sources[0];
-        if (!imageUrl) {
-          continue;
-        }
-
-        const anchor = img.closest("a");
-        const linkUrl = url(anchor?.href) || url(cardLink(img));
-        // Unary + rather than Number(), which the page can replace.
-        const width = +(img.naturalWidth || img.getAttribute("width")) || null;
-        const height = +(img.naturalHeight || img.getAttribute("height")) || null;
-        const linked = Boolean(linkUrl) && linkUrl !== imageUrl;
-        const key = linked ? `${imageUrl}::${linkUrl}` : imageUrl;
-        if (seen.has(key)) {
-          continue;
-        }
-        seen.add(key);
-        if (linked) {
-          const links = (linkCounts.get(imageUrl) || 0) + 1;
-          if (links > maxLinksPerImage) {
-            continue;
-          }
-          linkCounts.set(imageUrl, links);
-        }
-
-        const alt = clip(img.getAttribute("alt"), maxText) || clip(anchor?.getAttribute("title"), maxText)
-          || clip(anchor?.getAttribute("aria-label"), maxText);
-        out[out.length] = { imageUrl, linkUrl: linkUrl || null, width, height, alt };
-      }
-      return {
-        title: clip(document.title, maxText) || url(document.location.href),
-        items: out
-      };
-    }, {
-      cap: limit,
-      maxDepth: CARD_LINK_MAX_DEPTH,
-      maxLinksPerImage: MAX_LINKS_PER_IMAGE,
-      maxUrl: RENDER_MAX_URL_CHARS,
-      maxText: RENDER_MAX_TEXT_CHARS,
-      standInSource: PLACEHOLDER_IMAGE_NAME.source
-    });
-
-    const sanitized = items
-      .filter((item) => isAllowedImageUrl(item.imageUrl))
-      .filter((item) => !item.linkUrl || isAllowedLink(item.linkUrl))
-      .filter((item) => passesDimensionHeuristic(item.imageUrl, item.linkUrl, item.width, item.height))
-      .slice(0, limit)
-      .map((item) => ({ ...item, alt: imageLabel(item.alt) }));
-
-    return {
-      title: title || sourceUrl,
-      items: sanitized,
-      method: "playwright_fallback"
-    };
+    const { title, items } = await page.evaluate(collectRenderedImages, renderCollectArgs(limit));
+    return finishRenderedExtraction(sourceUrl, limit, title, items);
   }
 }
+
+// Plugged in by a host that renders pages itself (the desktop app's Electron
+// window) instead of Playwright: (sourceUrl, { limit, fetchUpstream }) resolves
+// to the raw { title, items } of collectRenderedImages(). It must route every
+// request through fetchUpstream, as routeContextThroughNode() does.
+let externalPageRenderer = null;
+export {
+  isAllowedImageUrl,
+  isAllowedLink,
+  isDuplicateImageReference,
+  parseDimension,
+  passesDimensionHeuristic
+} from "./html-images.js";
+
+export function setPageRenderer(renderer) {
+  externalPageRenderer = renderer;
+}
+
+export function renderCollectArgs(limit) {
+  return {
+    cap: limit,
+    maxDepth: CARD_LINK_MAX_DEPTH,
+    maxLinksPerImage: MAX_LINKS_PER_IMAGE,
+    maxUrl: RENDER_MAX_URL_CHARS,
+    maxText: RENDER_MAX_TEXT_CHARS,
+    standInSource: PLACEHOLDER_IMAGE_NAME.source
+  };
+}
+
+function finishRenderedExtraction(sourceUrl, limit, title, items) {
+  const sanitized = (Array.isArray(items) ? items : [])
+    .filter((item) => isAllowedImageUrl(item.imageUrl))
+    .filter((item) => !item.linkUrl || isAllowedLink(item.linkUrl))
+    .filter((item) => passesDimensionHeuristic(item.imageUrl, item.linkUrl, item.width, item.height))
+    .slice(0, limit)
+    .map((item) => ({ ...item, alt: imageLabel(item.alt) }));
+  return {
+    title: title || sourceUrl,
+    items: sanitized,
+    method: "playwright_fallback"
+  };
+}
+
+// Runs IN THE PAGE (serialised by page.evaluate or the desktop renderer), so it
+// may use nothing from this module. Every string goes through window.__sbClip.
+export function collectRenderedImages({ cap, maxDepth, maxLinksPerImage, maxUrl, maxText, standInSource }) {
+  // Every string goes through the init script's clip (playwright-render.js),
+  // and `out` grows by index, not push: the page may have patched both.
+  const clip = window.__sbClip;
+  if (typeof clip !== "function") {
+    return { title: "", items: [] };
+  }
+  // A page could patch RegExp; the worst it gets is its own stand-in chosen,
+  // which passesDimensionHeuristic() then drops.
+  const standIn = new RegExp(standInSource, "i");
+  const url = (value) => (clip(value, maxUrl + 1).length > maxUrl ? "" : clip(value, maxUrl));
+  // cardLinkFor(), in the page.
+  const cardLink = (img) => {
+    let el = img.parentElement;
+    for (let depth = 0; depth < maxDepth && el; depth += 1) {
+      const links = new Set();
+      for (const a of el.querySelectorAll("a[href]")) {
+        if (!clip(a.getAttribute("href"), 1).startsWith("#")) {
+          links.add(url(a.href));
+        }
+      }
+      if (links.size === 1) {
+        return [...links][0];
+      }
+      if (links.size > 1) {
+        return null;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  };
+  const out = [];
+  const seen = new Set();
+  const linkCounts = new Map();
+  for (const img of document.querySelectorAll("img")) {
+    if (out.length >= cap * 3) {
+      break;
+    }
+
+    // As pickImageSource(): a lazy page's stand-in loses to the real image.
+    const sources = [img.currentSrc, img.src, img.getAttribute("src"), img.getAttribute("data-src")].map(url).filter(Boolean);
+    const imageUrl = sources.find((value) => !standIn.test(value.split(/[?#]/)[0].split("/").pop())) || sources[0];
+    if (!imageUrl) {
+      continue;
+    }
+
+    const anchor = img.closest("a");
+    const linkUrl = url(anchor?.href) || url(cardLink(img));
+    // Unary + rather than Number(), which the page can replace.
+    const width = +(img.naturalWidth || img.getAttribute("width")) || null;
+    const height = +(img.naturalHeight || img.getAttribute("height")) || null;
+    const linked = Boolean(linkUrl) && linkUrl !== imageUrl;
+    const key = linked ? `${imageUrl}::${linkUrl}` : imageUrl;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    if (linked) {
+      const links = (linkCounts.get(imageUrl) || 0) + 1;
+      if (links > maxLinksPerImage) {
+        continue;
+      }
+      linkCounts.set(imageUrl, links);
+    }
+
+    const alt = clip(img.getAttribute("alt"), maxText) || clip(anchor?.getAttribute("title"), maxText)
+      || clip(anchor?.getAttribute("aria-label"), maxText);
+    out[out.length] = { imageUrl, linkUrl: linkUrl || null, width, height, alt };
+  }
+  return {
+    title: clip(document.title, maxText) || url(document.location.href),
+    items: out
+  };
+}
+

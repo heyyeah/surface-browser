@@ -1,0 +1,47 @@
+appId: net.boxc.surfacebrowser
+productName: Surface Browser
+copyright: Tim Plaisted
+directories:
+  app: build/app # staged by stage.mjs
+  output: build/dist
+  buildResources: build-resources
+# sharp ships prebuilt N-API binaries; nothing to rebuild against Electron.
+npmRebuild: false
+asar: true
+asarUnpack:
+  - "**/*.node"
+  - "**/node_modules/sharp/**"
+  - "**/node_modules/@img/**"
+  - "server/svg-render-worker.js"
+mac:
+  # No version in the DMG's name, so releases/latest/download/<name> is a link
+  # that never changes (the public README uses it). No spaces either: GitHub
+  # renames them in release assets.
+  artifactName: Surface-Browser-${version}-mac-${arch}.${ext}
+  target:
+    - target: dmg
+      arch: arm64
+    - target: zip # what auto-update downloads
+      arch: arm64
+  category: public.app-category.entertainment
+  hardenedRuntime: true
+  entitlements: build-resources/entitlements.mac.plist
+  entitlementsInherit: build-resources/entitlements.mac.plist
+  # Signs with the Developer ID certificate in CSC_LINK, and notarizes with
+  # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID when they are set.
+dmg:
+  artifactName: Surface-Browser-mac-${arch}.${ext}
+win:
+  target:
+    - target: nsis
+      arch: x64
+nsis:
+  oneClick: false
+  perMachine: false
+publish:
+  provider: github
+  owner: heyyeah
+  repo: surface-browser-web
+  # The workflow creates the draft first and publishes it once every file is up:
+  # the DMG and zip upload in parallel, and both tried to create the release.
+  releaseType: draft

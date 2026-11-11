@@ -284,7 +284,10 @@ export function looksLikeSvg(buffer) {
     return false;
   }
   const head = buffer.toString("utf8", 0, Math.min(buffer.length, 4096)).replace(/^\uFEFF/, "");
-  return /^\s*(<\?xml[^>]*\?>\s*)?(<!--[\s\S]*?-->\s*)*(<!doctype[^>]*>\s*)?<svg[\s>]/i.test(head);
+  // Each comment body must stop at its first "-->": a lazy [\s\S]*? here backtracks
+  // exponentially on a run of comments not followed by <svg (one request froze the
+  // event loop).
+  return /^\s*(<\?xml[^>]*\?>\s*)?(<!--(?:(?!-->)[\s\S])*-->\s*)*(<!doctype[^>]*>\s*)?<svg[\s>]/i.test(head);
 }
 
 export function sanitizeSvg(text) {
@@ -302,14 +305,14 @@ export function sanitizeSvg(text) {
 // Resolves a PNG whose long edge is maxEdgePx (up or down), or throws
 // ImageFormatError.
 //
-// The render runs in a child process that is killed at the deadline. sharp's own
-// timeout is only checked between tiles, and a few KB of <use>d filters made one
-// tile take 30 s while holding a libuv thread the whole server shares.
+// Sanitising and rendering run in a child process that is killed at the deadline.
+// sharp's own timeout is only checked between tiles, and a few KB of <use>d filters
+// made one tile take 30 s while holding a libuv thread the whole server shares. The
+// sanitiser's lazy regexes are quadratic on unclosed tags, so it must not run here.
 export async function rasterizeSvg(buffer, maxEdgePx = PROXY_IMAGE_MAX_EDGE_PX) {
   if (buffer.length > SVG_MAX_BYTES) {
     throw new ImageFormatError("SVG is too large");
   }
-  const clean = Buffer.from(sanitizeSvg(buffer.toString("utf8")));
   return new Promise((resolve, reject) => {
     const child = fork(SVG_RENDER_WORKER, [], { serialization: "advanced", execArgv: [], stdio: ["ignore", "ignore", "inherit", "ipc"] });
     let done = false;
@@ -336,7 +339,7 @@ export async function rasterizeSvg(buffer, maxEdgePx = PROXY_IMAGE_MAX_EDGE_PX) 
     });
     child.once("error", (err) => finish(new ImageFormatError(`SVG could not be drawn (${err.message})`)));
     child.once("exit", () => finish(new ImageFormatError("SVG could not be drawn")));
-    child.send({ svg: clean, maxEdgePx });
+    child.send({ svg: buffer, maxEdgePx });
   });
 }
 

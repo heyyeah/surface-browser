@@ -8,7 +8,8 @@ import {
   AUTO_ADVANCE_IDLE_TIMEOUT_DEFAULT_MS,
   AUTO_ADVANCE_FREE_IDLE_TIMEOUT_DEFAULT_MS,
   normalizeIdleTimeoutMs,
-  stepAutoAdvanceIdle
+  stepAutoAdvanceIdle,
+  stepUnattendedHops
 } from "../src/idle-auto-advance.js";
 
 const T = 300_000;
@@ -109,7 +110,7 @@ test("normalizeIdleTimeoutMs keeps 0 (explicitly off) but rejects nonsense", () 
 
 test("the shipped default is on, and long enough to watch several dwell cycles", () => {
   assert.ok(AUTO_ADVANCE_IDLE_TIMEOUT_DEFAULT_MS > 0);
-  // SPHERE_DWELL_SECONDS is 20; a viewer must get several uninterrupted hops.
+  // SPHERE_DWELL_SECONDS is 35; a viewer must get several uninterrupted hops.
   assert.ok(AUTO_ADVANCE_IDLE_TIMEOUT_DEFAULT_MS >= 5 * 20_000);
 });
 
@@ -171,8 +172,9 @@ const sphereJs = fs.readFileSync(new URL("../src/sphere.js", import.meta.url), "
 const mainJs = fs.readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
 
 test("the dwell clock freezes while suspended AND the paid branch re-checks", () => {
-  assert.match(transitionsJs, /if \(!state\.sphereInteractionHold && !state\.sphereDwellHeldByOnboarding && !isSettingsOpen\(\) && !idle\.suspended\) \{/);
-  assert.match(transitionsJs, /state\.sphereDwellSeconds >= SPHERE_DWELL_SECONDS && !idle\.suspended/);
+  assert.match(transitionsJs, /if \(!state\.sphereInteractionHold && !state\.sphereDwellHeldByOnboarding && !isSettingsOpen\(\) && !paused\) \{/);
+  assert.match(transitionsJs, /state\.sphereDwellSeconds >= SPHERE_DWELL_SECONDS && !paused/);
+  assert.match(transitionsJs, /const paused = idle\.suspended \|\| hopCapped;/);
 });
 
 test("gaze selection is NOT counted as a person", () => {
@@ -240,4 +242,17 @@ test("the pause names what actually paused", () => {
   const notice = ui.slice(ui.indexOf("if (footerNotice) {"));
   assert.match(notice.slice(0, 200), /trimForFooter\(footerNotice/);
   assert.doesNotMatch(notice.slice(0, 200), /tunnelErrorText/, "not the GenAI formatter");
+});
+
+test("unattended paid hops are capped until the next input", () => {
+  // After input at t=100: the first hop runs, the second is capped.
+  let step = stepUnattendedHops({ lastInputMs: 100, sinceInputMs: null, hops: 0, limit: 1 });
+  assert.deepEqual(step, { sinceInputMs: 100, hops: 0, capped: false });
+  step = stepUnattendedHops({ lastInputMs: 100, sinceInputMs: step.sinceInputMs, hops: step.hops + 1, limit: 1 });
+  assert.equal(step.capped, true);
+  // Any input starts the count again.
+  step = stepUnattendedHops({ lastInputMs: 900, sinceInputMs: step.sinceInputMs, hops: step.hops, limit: 1 });
+  assert.deepEqual(step, { sinceInputMs: 900, hops: 0, capped: false });
+  // 0 means no limit.
+  assert.equal(stepUnattendedHops({ lastInputMs: 1, sinceInputMs: 1, hops: 50, limit: 0 }).capped, false);
 });

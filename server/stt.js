@@ -459,6 +459,10 @@ function decodeWavPcm(buffer) {
 
 async function fetchWithTimeout(url, options = {}) {
   const controller = new AbortController();
+  if (/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(url)) {
+    // fetch's error would quote the URL with its password, and STT errors reach visitors.
+    throw new SttConfigError("STT_ENDPOINT must not contain credentials");
+  }
   const timer = setTimeout(() => controller.abort(), STT_TIMEOUT_MS);
   try {
     return await fetch(url, { ...options, signal: controller.signal });

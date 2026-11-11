@@ -182,6 +182,15 @@ export const state = {
   // spending needs a short leash.
   autoAdvanceFreeIdleTimeoutMs: AUTO_ADVANCE_FREE_IDLE_TIMEOUT_DEFAULT_MS,
   autoAdvanceSuspended: false,
+  // Seconds of cruise drift in this sphere; turns the drift direction (sphere.js).
+  sphereDriftSwingSeconds: 0,
+  // Paid hops allowed with no input in between (0: no limit), from /api/health.
+  autoAdvancePaidIdleHops: 0,
+  unattendedPaidHops: 0,
+  unattendedHopsSinceInputMs: null,
+  autoAdvanceHopCapped: false,
+  // Set when the dwell starts the next hop by itself; tells the server to buy fewer.
+  pendingExitUnattended: false,
   sphereTextureCursor: 0,
   sphereTextureCycleRadians: 0,
 

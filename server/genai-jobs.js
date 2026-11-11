@@ -211,7 +211,8 @@ export async function handleGenAi(req, res) {
   // The batch seed is minted here because the planner must choose each slot's
   // modifier with the seed the generator will then use.
   const batchSeed = seed ?? createGenAiSeed();
-  let poolBatch = planGenAiPoolBatch({ prompt, negativePrompt, count, sourceRecord, batchSeed });
+  const unattended = req.body?.unattended === true;
+  let poolBatch = planGenAiPoolBatch({ prompt, negativePrompt, count, sourceRecord, batchSeed, unattended });
   let billableCount = poolBatch ? poolBatch.freshCount : count;
   Object.assign(requestLogDetails, genAiPoolLogDetails(poolBatch));
 
@@ -333,7 +334,7 @@ function getGenAiClientKey(req) {
   return String(req.get("x-genai-client-id") || req.ip || req.socket.remoteAddress || "unknown");
 }
 
-function enqueueGenAiJob(clientKey, run) {
+function enqueueGenAiJob(clientKey, run, progressJob = null) {
   abortPendingGenAiJobs(clientKey);
 
   // A job queued behind an active one runs later, off that other job's
@@ -362,17 +363,37 @@ function enqueueGenAiJob(clientKey, run) {
     }
 
     genAiQueue.pending.push(job);
+    // A DELETE must free this slot too, not only the same visitor's next prompt.
+    if (progressJob) {
+      progressJob.queueEntry = job;
+    }
   });
 }
 
 // A batch the pool fills entirely buys nothing, so it never waits behind a
 // paid one.
-function enqueueGenAiBatch(clientKey, poolBatch, run) {
+function enqueueGenAiBatch(clientKey, poolBatch, run, progressJob) {
   if (poolBatch?.freshCount === 0) {
     abortPendingGenAiJobs(clientKey);
     return Promise.resolve().then(run);
   }
-  return enqueueGenAiJob(clientKey, run);
+  return enqueueGenAiJob(clientKey, run, progressJob);
+}
+
+function abortQueuedEntry(entry) {
+  const index = genAiQueue.pending.indexOf(entry);
+  if (index === -1) {
+    return;
+  }
+  genAiQueue.pending.splice(index, 1);
+  entry.aborted = true;
+  entry.reject(new GenAiAbortError("GenAI job cancelled"));
+}
+
+// The kill switch must stop batches already running or queued, not only refuse
+// new requests.
+function jobMustStop(job) {
+  return job.cancelled || killSwitch.isEngaged();
 }
 
 function abortPendingGenAiJobs(clientKey) {
@@ -563,6 +584,9 @@ function cancelGenAiProgressJob(job) {
   job.cancelled = true;
   job.status = "cancelled";
   job.error = "GenAI job cancelled";
+  if (job.queueEntry) {
+    abortQueuedEntry(job.queueEntry);
+  }
   touchGenAiProgressJob(job);
   logApiQuery("genai.cancelled", {
     ...genAiQueryLogDetails({
@@ -574,6 +598,15 @@ function cancelGenAiProgressJob(job) {
     jobId: job.id,
     durationMs: Date.now() - job.createdAt
   });
+}
+
+// A settings save drops every job; stop them first, or they keep buying images
+// that nothing can cancel or collect.
+export function cancelAllGenAiProgressJobs() {
+  for (const job of genAiProgressJobs.values()) {
+    cancelGenAiProgressJob(job);
+  }
+  genAiProgressJobs.clear();
 }
 
 function cancelActiveGenAiProgressJobs(clientKey) {
@@ -621,7 +654,7 @@ function startGenAiProgressJob(job, params) {
     }
   }
   return providerBillingContext.run(providerBilling, () => enqueueGenAiBatch(job.clientKey, params.poolBatch, async () => {
-    if (job.cancelled) {
+    if (jobMustStop(job)) {
       throw new GenAiAbortError("GenAI job cancelled");
     }
     const startedAt = Date.now();
@@ -640,7 +673,7 @@ function startGenAiProgressJob(job, params) {
     const selected = await generateImagesProgressive({
       ...params,
       poolSlots: params.poolBatch?.slots || null,
-      shouldCancel: () => job.cancelled,
+      shouldCancel: () => jobMustStop(job),
       onItems: (items, index) => {
         appendGenAiProgressItems(job, items);
         progress.slots = index + 1;
@@ -668,6 +701,9 @@ function startGenAiProgressJob(job, params) {
     });
     rememberGenAiPromptBatch(params.promptCacheKey, selected, params.count);
     job.cached = false;
+    // A slot can store nothing (filtered, unstorable): without this a short batch
+    // reads complete-but-not-done and the client polls forever.
+    job.expected = job.items.length;
     job.status = "complete";
     releaseUndelivered();
     touchGenAiProgressJob(job);
@@ -687,7 +723,7 @@ function startGenAiProgressJob(job, params) {
       totalDurationMs: Date.now() - job.createdAt
     });
     return selected;
-  })).then(() => null, (err) => {
+  }, job)).then(() => null, (err) => {
     if (job.cancelled || err instanceof GenAiAbortError) {
       job.cancelled = true;
       job.status = "cancelled";

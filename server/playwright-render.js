@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+
 // Headless Chromium for the extract fallback, with Node doing all its networking.
 //
 // If Chromium resolved hosts itself, the route check and the connection could
@@ -18,13 +20,23 @@ export const CHROMIUM_LOCKDOWN_ARGS = [
 // Chromium runs whatever script the page a visitor named carries, so the
 // browser's own sandbox stays on (Playwright turns it off unless asked) and the
 // browser gets none of this process's environment, which holds the provider
-// keys. On Ubuntu 24.04+ the sandbox needs deploy/apparmor/playwright-chromium.
+// keys. On Ubuntu 24.04+ the sandbox needs an AppArmor profile granting userns:
+// Ubuntu's own `chrome` profile for PLAYWRIGHT_CHANNEL=chrome, or
+// deploy/apparmor/playwright-chromium for the bundled build.
 const CHROMIUM_ENV_KEYS = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "FONTCONFIG_PATH", "FONTCONFIG_FILE", "XDG_CACHE_HOME", "XDG_CONFIG_HOME"];
-const chromiumEnv = () => Object.fromEntries(
-  CHROMIUM_ENV_KEYS.filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]])
-);
+const chromiumEnv = () => ({
+  ...Object.fromEntries(
+    CHROMIUM_ENV_KEYS.filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]])
+  ),
+  // Chrome (unlike the bundled headless shell) will not start without a writable
+  // HOME, and the service's home is read-only; its /tmp is private.
+  ...(process.env.PLAYWRIGHT_CHANNEL ? { HOME: tmpdir() } : {})
+});
 
 export const CHROMIUM_LAUNCH_OPTIONS = {
+  // "chrome" = the system Google Chrome, which apt keeps current; unset = the
+  // build bundled with this Playwright version, which lags Chrome stable.
+  ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}),
   headless: true,
   chromiumSandbox: true,
   env: chromiumEnv(),
@@ -38,6 +50,10 @@ export const CHROMIUM_LAUNCH_OPTIONS = {
 
 // Service workers fetch outside page.route.
 export const CONTEXT_LOCKDOWN_OPTIONS = { serviceWorkers: "block" };
+
+// Not fetched in a render: they cost upstream requests and memory and never
+// change which images a page shows. Same names in Playwright and Electron.
+export const RENDER_SKIPPED_RESOURCE_TYPES = new Set(["font", "media"]);
 
 // Hop-by-hop headers, plus the ones Node's fetch owns. Conditional headers are
 // dropped so upstream never answers 304 with no body to fulfil.
@@ -198,6 +214,10 @@ export async function routeContextThroughNode(context, { fetchUpstream, maxInFli
     // GET/HEAD only: replaying a page's POSTs would make this server an
     // anonymous relay for whatever the page submits.
     if (!/^https?:/i.test(url) || !["GET", "HEAD"].includes(request.method())) {
+      await refuse(route, "blockedbyclient");
+      return;
+    }
+    if (RENDER_SKIPPED_RESOURCE_TYPES.has(request.resourceType())) {
       await refuse(route, "blockedbyclient");
       return;
     }

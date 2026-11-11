@@ -126,6 +126,31 @@ export const TUNNEL_WALL_OPAQUE = (() => {
   }
 })();
 
+// `?water=procedural` draws the tunnel wall with a shader instead of the photo
+// tile, and `&wateralpha=0..1` sets how opaque its blue is (src/tunnel-water.js).
+// Experimental; null keeps the photo.
+export const TUNNEL_WATER = (() => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("water") !== "procedural") {
+      return null;
+    }
+    const alpha = Number(params.get("wateralpha"));
+    return { bodyAlpha: params.has("wateralpha") && Number.isFinite(alpha) ? Math.min(1, Math.max(0, alpha)) : 1 };
+  } catch {
+    return null;
+  }
+})();
+
+// `?fps=1` shows a frame-rate readout, floating in view in XR (src/fps-meter.js).
+export const SHOW_FPS = (() => {
+  try {
+    return new URLSearchParams(window.location.search).get("fps") === "1";
+  } catch {
+    return false;
+  }
+})();
+
 // `?rings=300` is the other half of that diagnostic: a short, coarse wall
 // (also 64 segments), small enough for 16-bit indices.
 export const TUNNEL_RINGS_OVERRIDE = (() => {

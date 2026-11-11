@@ -11,6 +11,13 @@ it. It runs in a desktop or mobile browser and in VR on Meta Quest (2, 3, 3S) an
 Pico 4 Ultra.
 [About the work](https://boxc.net/surfacebrowser.html)
 
+## Mac app
+
+**[Download for Mac](https://github.com/heyyeah/surface-browser-web/releases/latest/download/Surface-Browser-mac-arm64.dmg)**
+(Apple silicon, signed and notarized). Open it, drag the app to Applications,
+and it updates itself. It is this repository's web version running on your
+computer; settings and Windows build steps are in [`desktop/README.md`](desktop/README.md).
+
 ## Run it locally
 
 Needs Node 24+ from https://nodejs.org/ (see `.nvmrc`).

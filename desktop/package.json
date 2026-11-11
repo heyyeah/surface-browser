@@ -1,0 +1,26 @@
+{
+  "name": "surface-browser-desktop",
+  "productName": "Surface Browser",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "description": "Surface Browser as a desktop app",
+  "scripts": {
+    "start": "npm --prefix .. run build && electron .",
+    "stage": "npm --prefix .. run build && node stage.mjs",
+    "dist:mac": "npm run stage && electron-builder --mac --publish never",
+    "dist:win": "npm run stage && electron-builder --win --publish never",
+    "publish:mac": "electron-builder --mac --publish always",
+    "release:mac": "npm run stage && npm run publish:mac",
+    "test:renderer": "electron test/renderer-e2e.mjs"
+  },
+  "devDependencies": {
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0"
+  },
+  "allowScripts": {
+    "electron": true,
+    "electron-winstaller": false
+  }
+}

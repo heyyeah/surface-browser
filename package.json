@@ -24,13 +24,13 @@
     "undici": "^8.12.3"
   },
   "optionalDependencies": {
-    "playwright": "^1.64.1"
+    "playwright": "^1.65.0"
   },
   "devDependencies": {
     "vite": "^8.3.5"
   },
   "allowScripts": {
-    "esbuild": false,
+    "fsevents": false,
     "onnxruntime-node": false,
     "protobufjs": false
   }

@@ -1,0 +1,89 @@
+# Builds, signs, notarizes and publishes the Mac app when run by hand
+# (Actions > Desktop app (macOS) > Run workflow) on the public repo. Each run is
+# a GitHub Release, which is what the app's auto-update reads. Lives at the
+# root of the public repo only (exported from clients/browser/.github in the
+# source repo, where GitHub ignores it).
+#
+# Repository secrets (Settings > Secrets and variables > Actions):
+#   MAC_CERT_P12_BASE64         Developer ID Application certificate + key, .p12, base64
+#   MAC_CERT_PASSWORD           the .p12's password
+#   APPLE_ID                    the Apple Account that notarizes
+#   APPLE_APP_SPECIFIC_PASSWORD an app-specific password for it (account.apple.com)
+#   APPLE_TEAM_ID               the 10-character team ID
+
+name: Desktop app (macOS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, e.g. 0.2.0 (must be higher than the last release)"
+        required: true
+
+permissions:
+  contents: write # create the release
+
+concurrency:
+  group: desktop-mac
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'heyyeah/surface-browser-web'
+    runs-on: macos-15 # Apple silicon
+    timeout-minutes: 45
+    steps:
+      # Actions pinned to commits, not tags: a moved tag cannot change what runs
+      # with the signing secrets.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install
+        run: |
+          npm ci --no-audit --no-fund
+          npm --prefix desktop ci --no-audit --no-fund
+      - name: Test
+        run: npm test
+      - name: Version
+        working-directory: desktop
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::version must look like 0.2.0"; exit 1; }
+          npm version --no-git-tag-version "$VERSION"
+      - name: Test renderer
+        run: npm --prefix desktop run test:renderer
+      - name: Stage
+        working-directory: desktop
+        run: npm run stage
+      - name: Sign, notarize, publish
+        working-directory: desktop
+        env:
+          CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        # Without the secrets electron-builder would publish an unsigned build,
+        # and auto-update would offer it to everyone.
+        run: |
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            [ -n "${!name}" ] || { echo "::error::secret for $name is not set"; exit 1; }
+          done
+          gh release create "v$VERSION" --draft --title "$VERSION" --notes "Surface Browser $VERSION for Mac (Apple silicon)." --target "$GITHUB_SHA"
+          npm run publish:mac
+      # Auto-update reads latest-mac.yml from the newest published release, so the
+      # release goes public only after every file, that one last, is uploaded.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          gh release view "v$VERSION" --json assets -q '.assets[].name' | grep -qx latest-mac.yml \
+            || { echo "::error::latest-mac.yml was not uploaded"; exit 1; }
+          gh release edit "v$VERSION" --draft=false --latest

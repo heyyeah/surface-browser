@@ -70,6 +70,11 @@ export async function assertTargetUrlAllowed(
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new RequestPolicyError("Target URL must use http or https");
   }
+  // undici refuses these with an error quoting the whole URL, password included,
+  // and provider errors reach visitors.
+  if (parsed.username || parsed.password) {
+    throw new RequestPolicyError("Target URL must not contain credentials");
+  }
 
   const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
   if (!allowNonStandardPort && port !== "80" && port !== "443") {
@@ -97,7 +102,7 @@ export async function assertTargetUrlAllowed(
 
   let records;
   try {
-    records = await dns.lookup(hostname, { all: true, verbatim: true });
+    records = await boundedLookup(hostname);
   } catch (err) {
     throw new RequestPolicyError(`Target hostname could not be resolved: ${hostname}`);
   }
@@ -116,6 +121,43 @@ export async function assertTargetUrlAllowed(
   // back (not just the first) so the pinned dispatcher in fetchWithTimeout() can
   // still fail over between them without dialing an address the loop did not see.
   return { url: parsed.toString(), addresses: records };
+}
+
+// dns.lookup runs getaddrinfo on libuv's threadpool, shared with file I/O and
+// sharp, and cannot be cancelled. Visitor-supplied hostnames whose DNS never
+// answers would each hold a thread for the resolver's full timeout, so cap how
+// many run at once and give up waiting after a deadline. A timed-out lookup
+// keeps its slot until it actually returns: that thread is still busy.
+const DNS_MAX_CONCURRENT = 8;
+const DNS_TIMEOUT_MS = 8000;
+let dnsActive = 0;
+const dnsWaiting = [];
+
+function releaseDnsSlot() {
+  const next = dnsWaiting.shift();
+  if (next) next();
+  else dnsActive -= 1;
+}
+
+function boundedLookup(hostname) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      const queued = dnsWaiting.indexOf(start);
+      if (queued !== -1) dnsWaiting.splice(queued, 1);
+      reject(new Error("DNS lookup timed out"));
+    }, DNS_TIMEOUT_MS);
+    function start() {
+      if (settled) { releaseDnsSlot(); return; }
+      dns.lookup(hostname, { all: true, verbatim: true }).then(
+        (records) => { if (!settled) { settled = true; clearTimeout(timer); resolve(records); } },
+        (err) => { if (!settled) { settled = true; clearTimeout(timer); reject(err); } }
+      ).finally(releaseDnsSlot);
+    }
+    if (dnsActive < DNS_MAX_CONCURRENT) { dnsActive += 1; start(); }
+    else dnsWaiting.push(start);
+  });
 }
 
 export function browserUserAgent() {
@@ -141,6 +183,24 @@ export function createPinnedDispatcher(addresses) {
       }
     }
   });
+}
+
+// Credential header values per response, so an error body that echoes them
+// (readErrorResponseDetail) can be redacted before it reaches a visitor.
+const responseSecrets = new WeakMap();
+const SECRET_HEADER = /auth|key|token|secret/i;
+
+function secretHeaderValues(headers) {
+  const values = [];
+  for (const [name, value] of new Headers(headers || {})) {
+    if (SECRET_HEADER.test(name) && value) {
+      values.push(value);
+      // "Bearer abc" / "Key abc": the token alone may be echoed too.
+      const token = value.split(/\s+/).pop();
+      if (token && token !== value && token.length >= 8) values.push(token);
+    }
+  }
+  return values;
 }
 
 export async function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS, policyOptions = {}) {
@@ -170,6 +230,8 @@ export async function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TI
     }
 
     if (!isRedirectStatus(response.status)) {
+      const secrets = secretHeaderValues(options.headers);
+      if (secrets.length) responseSecrets.set(response, secrets);
       // Deliberately not cleared here: the caller reads the body (see
       // readResponseBuffer) after this returns, and the same timer must still abort a
       // body trickled past timeoutMs, not just a slow connect/headers wait. Firing
@@ -279,6 +341,15 @@ export async function readJsonResponse(response, label, maxBytes = Math.min(MAX_
 }
 
 export async function readErrorResponseDetail(response) {
+  const detail = await readErrorResponseText(response);
+  let redacted = detail;
+  for (const secret of responseSecrets.get(response) || []) {
+    redacted = redacted.split(secret).join("[redacted]");
+  }
+  return redacted;
+}
+
+async function readErrorResponseText(response) {
   try {
     const text = (await readResponseBuffer(response, Math.min(MAX_RESPONSE_BYTES, 4096))).toString("utf8").trim();
     if (!text) {

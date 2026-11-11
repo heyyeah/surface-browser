@@ -71,6 +71,9 @@ export const SETTING_DEFINITIONS = Object.freeze({
   // The same guard for a free hop: a web or search sphere's dwell exit is a page
   // fetch, so an abandoned tab only spends bandwidth, but forever. Longer default.
   AUTO_ADVANCE_FREE_IDLE_TIMEOUT_MS: { defaultValue: 3_600_000, type: "integer", min: 0, max: 86_400_000 },
+  // Paid (GenAI) hops the piece may make by itself with no input in between, then
+  // it pauses until someone moves. 0: no limit beyond the idle timeout.
+  AUTO_ADVANCE_PAID_IDLE_HOPS: { defaultValue: 0, type: "integer", min: 0, max: 100 },
   SHOW_STATUS_FOOTER: { defaultValue: true, type: "boolean" },
   SHOW_IMAGE_LIST: { defaultValue: true, type: "boolean" },
   // Whether the image list's generated rows are clickable links. Off makes them
@@ -518,13 +521,17 @@ export function coerceSettingValue(value, definition) {
     return normalized;
   }
   if (definition.type === "url" && str) {
+    let parsed;
     try {
-      const parsed = new URL(str);
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        throw new Error("URL must use http or https");
-      }
+      parsed = new URL(str);
     } catch {
+      parsed = null;
+    }
+    if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
       throw new Error("Expected a valid http(s) URL");
+    }
+    if (parsed.username || parsed.password) {
+      throw new Error("URL must not contain credentials; use the API key setting");
     }
   }
   return str;

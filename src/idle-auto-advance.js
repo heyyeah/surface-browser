@@ -56,3 +56,12 @@ export function stepAutoAdvanceIdle({ nowMs, lastInputMs, timeoutMs, suspended =
     idleMs
   };
 }
+
+// Counts the paid hops the piece made by itself since the last input; any input
+// starts the count again. `capped` once `limit` hops ran (0: never capped).
+export function stepUnattendedHops({ lastInputMs, sinceInputMs, hops, limit } = {}) {
+  const fresh = lastInputMs !== sinceInputMs;
+  const count = fresh ? 0 : Math.max(0, Number(hops) || 0);
+  const max = Math.max(0, Math.floor(Number(limit) || 0));
+  return { sinceInputMs: lastInputMs, hops: count, capped: max > 0 && count >= max };
+}

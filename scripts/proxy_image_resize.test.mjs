@@ -193,7 +193,13 @@ test("SVG is recognised with or without a prolog, and nothing else is", async ()
   assert.equal(looksLikeSvg(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>')), true);
   assert.equal(looksLikeSvg(Buffer.from("\uFEFF<!-- c --><svg>")), true);
   assert.equal(looksLikeSvg(Buffer.from("<html><svg></svg></html>")), false);
-  assert.equal(looksLikeSvg(await sharp({ create: { width: 4, height: 4, channels: 3, background: "red" } }).png().toBuffer()), false);
+  assert.equal(looksLikeSvg(await sharp({ create: { width: 4, height: 4, channels: 3, background: "red" } }).png().toBuffer()), false);});
+
+test("SVG detection stays fast on a run of comments with no <svg>", () => {
+  const started = performance.now();
+  assert.equal(looksLikeSvg(Buffer.from("<!-- -->".repeat(500) + "x")), false);
+  assert.equal(looksLikeSvg(Buffer.from("<!-- a --><!-- b -->\n<svg>")), true);
+  assert.ok(performance.now() - started < 100);
 });
 
 test("an SVG becomes a PNG at the texture cap, keeping its aspect", async () => {
@@ -325,4 +331,22 @@ test("the proxy route serves an SVG only as the PNG drawn from it", () => {
 
 test("proxied bytes carry a CSP that can load and run nothing", () => {
   assert.match(routeSource, /content-security-policy["']\s*,\s*["']default-src 'none'; sandbox/);
+});
+
+test("a hostile SVG is sanitised off the main thread", async () => {
+  // Unclosed <script repeated makes the sanitiser quadratic (seconds at this size).
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300">' + "<script".repeat(40_000));
+  let worstGapMs = 0;
+  let last = performance.now();
+  const ticker = setInterval(() => {
+    const now = performance.now();
+    worstGapMs = Math.max(worstGapMs, now - last);
+    last = now;
+  }, 10);
+  try {
+    await rasterizeSvg(svg).catch(() => null);
+  } finally {
+    clearInterval(ticker);
+  }
+  assert.ok(worstGapMs < 250, `event loop blocked for ${Math.round(worstGapMs)} ms`);
 });

@@ -27,6 +27,11 @@ export const GENAI_POOL_DIR = process.env.GENAI_POOL_DIR ? path.resolve(process.
 // once the pool is deep. 0/0 would make a warm sphere fully pre-baked and static.
 const GENAI_POOL_FRESH_MIN = parseNonNegativeInteger(process.env.GENAI_POOL_FRESH_MIN, 1);
 const GENAI_POOL_FRESH_MAX = parseNonNegativeInteger(process.env.GENAI_POOL_FRESH_MAX, 2);
+// Fresh images in a batch the piece started by itself (dwell auto-advance with
+// nobody touching it). Unset: no extra cap. The hosted piece sets 1.
+const GENAI_UNATTENDED_FRESH_MAX = process.env.GENAI_UNATTENDED_FRESH_MAX
+  ? parseNonNegativeInteger(process.env.GENAI_UNATTENDED_FRESH_MAX, 1)
+  : null;
 // The writable half of the pool (server/genai-pool-grow.js): fresh images from
 // GenAI bookmark lineages (up to GENAI_POOL_GROW_MAX_ROUND), kept and drawn like baked ones. Unset =
 // nothing is kept. Works with or without GENAI_POOL_DIR. Unlike the pack, this
@@ -354,7 +359,7 @@ function buildGenAiPoolSlots({ prompt, negativePrompt, count, sourceRecord, batc
   return slots;
 }
 
-export function planGenAiPoolBatch({ prompt, negativePrompt, count, sourceRecord, batchSeed }) {
+export function planGenAiPoolBatch({ prompt, negativePrompt, count, sourceRecord, batchSeed, unattended = false }) {
   const growRound = grownGenAiPool.active
     ? poolGrowthRound({ prompt, negativePrompt, sourceRecord, bookmarkPrompts: GENAI_BOOKMARK_PROMPTS, maxRound: GENAI_POOL_GROW_MAX_ROUND })
     : 0;
@@ -406,7 +411,7 @@ export function planGenAiPoolBatch({ prompt, negativePrompt, count, sourceRecord
   const plan = planPoolDraw({
     poolSize: reusable,
     count,
-    newCount: isGenAiQueueFull() || grownOut ? 0 : Math.min(count, randomGenAiPoolFreshQuota())
+    newCount: isGenAiQueueFull() || grownOut ? 0 : Math.min(count, randomGenAiPoolFreshQuota(), unattendedFreshCap(unattended))
   });
 
   // Pooled slots are chosen at random across the batch so pooled and fresh
@@ -676,6 +681,10 @@ async function readPoolReviewImage(member, edge) {
 // is configured, so a pool-off log is unchanged.
 export function genAiPoolLogDetails(poolBatch) {
   return poolBatch ? { pooled: poolBatch.pooledCount, fresh: poolBatch.freshCount } : {};
+}
+
+function unattendedFreshCap(unattended) {
+  return unattended && GENAI_UNATTENDED_FRESH_MAX !== null ? GENAI_UNATTENDED_FRESH_MAX : Infinity;
 }
 
 function randomGenAiPoolFreshQuota() {

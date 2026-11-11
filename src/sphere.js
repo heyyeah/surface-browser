@@ -7,6 +7,7 @@ import { xrHeadCamera } from "./xr-head-camera.js";
 import {
   SPHERE_IDLE_COLOR,
   SPHERE_SELECTION_HYSTERESIS_RAD,
+  SPHERE_DWELL_SECONDS,
   SPHERE_IMAGE_COUNT,
   SPHERE_ENTRY_LEAD_RINGS,
   SPHERE_ENTRY_AFTER_LAST_PANEL_RINGS,
@@ -116,6 +117,10 @@ const SPHERE_BLOOM_SWEEP_DECAY = 3.4;
 // exits aim it to match the release; see driftDirectionAfterRotation() in
 // xr-hand-gestures.js for why the choice is made there.
 const SPHERE_BASE_ROTATION_SPEED = -0.12;
+// The drift's direction across the two shell axes turns once per this many
+// seconds. A fixed direction (both axes equal) kept some panels behind the
+// viewer for good; a turning one brings every panel round in time.
+const SPHERE_DRIFT_SWING_SECONDS = 90;
 // Which pole the closed fan gathers on. 'near' = the entry side (touching the
 // tunnel mouth), so the bloom peels panels away from the entry point, like the
 // original Java (axis-projected textures dilated radially off the tunnel axis).
@@ -185,6 +190,7 @@ function clearSphere() {
 function resetSphereAnimationState() {
   state.irisXRot = 0;
   state.irisYRot = 0;
+  state.sphereDriftSwingSeconds = 0;
   state.irisXSpeed = 0.3;
   state.irisYSpeed = 0.3;
   state.irisForming = true;
@@ -836,7 +842,7 @@ function updateSphereSelectionTint(dt) {
   }
 
   if (nextSelected !== state.sphereSelectedIndex) {
-    markSphereInteraction();
+    graceDwellAfterSelectionChange();
     setSpherePanelSelected(spherePanels[state.sphereSelectedIndex], false);
 
     state.sphereSelectedIndex = nextSelected;
@@ -1041,6 +1047,20 @@ function getSphereNavigationTarget() {
 function markSphereInteraction() {
   if (state.appState === AppState.INSIDE_SPHERE) {
     state.sphereDwellSeconds = 0;
+  }
+}
+
+// The panel nearest the view centre changed. Mostly the drift does that, every
+// few seconds, so restarting the dwell here meant an untouched sphere never
+// advanced. The dwell keeps running; a newly selected panel only gets enough
+// time to be seen before the sphere follows it.
+const SELECTION_DWELL_GRACE_SECONDS = 5;
+function graceDwellAfterSelectionChange() {
+  if (state.appState === AppState.INSIDE_SPHERE) {
+    state.sphereDwellSeconds = Math.min(
+      state.sphereDwellSeconds,
+      SPHERE_DWELL_SECONDS - SELECTION_DWELL_GRACE_SECONDS
+    );
   }
 }
 
@@ -1314,6 +1334,7 @@ function activateSelectedSphereLink(panelIndex = -1) {
   state.pendingExitQuery = nextRequest.query;
   state.pendingExitMode = nextRequest.mode;
   state.pendingExitSource = nextRequest.source || null;
+  state.pendingExitUnattended = false;
   state.followedLabel = { query: nextRequest.query, text: nextRequest.label || "" };
   const addressText = nextRequest.mode === "genai"
     ? genAiAddressText(nextRequest.query, nextRequest.source?.stack)
@@ -1380,6 +1401,7 @@ function activateSelectedSphereImageForGenAi(panelIndex = -1) {
   state.pendingExitQuery = null;
   state.pendingExitMode = null;
   state.pendingExitSource = null;
+  state.pendingExitUnattended = false;
   startSphereExit({ steerToSelection: false });
   // After the exit, whose own status line would otherwise overwrite this one.
   setStatus(t("status.preparingImage"));
@@ -1425,6 +1447,7 @@ async function importSelectedSphereImageForGenAi({ imageUrl, mode, query }) {
     state.pendingExitQuery = prompt;
     state.pendingExitMode = "genai";
     state.pendingExitSource = { id: sourceId };
+    state.pendingExitUnattended = false;
     state.genAiLaunch = { ...state.genAiLaunch, status: "ready" };
     if (urlInput.value !== prompt) {
       urlInput.value = prompt;
@@ -1645,9 +1668,15 @@ function updateSphereAnimation(dt, isInsideSphere, transitionProgress = 1, isExi
         * state.sphereDriftDirection
         * state.sphereDriftGain
         * dt;
-      state.irisXRot += autoDelta;
-      state.irisYRot += autoDelta;
-      textureCycleDelta += Math.abs(autoDelta) * 2;
+      // (1, 1) at the start, so the handoff from the bloom (which drifts both
+      // axes equally) has no jump; then the direction turns.
+      state.sphereDriftSwingSeconds += dt;
+      const swing = (2 * Math.PI * state.sphereDriftSwingSeconds) / SPHERE_DRIFT_SWING_SECONDS;
+      const xDelta = autoDelta * (Math.cos(swing) - Math.sin(swing));
+      const yDelta = autoDelta * (Math.sin(swing) + Math.cos(swing));
+      state.irisXRot += xDelta;
+      state.irisYRot += yDelta;
+      textureCycleDelta += Math.abs(xDelta) + Math.abs(yDelta);
     }
   }
 
