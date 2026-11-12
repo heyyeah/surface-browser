@@ -585,7 +585,7 @@ function renderShortcutsMenu() {
   aboutLink.href = "https://boxc.net/surfacebrowser.html";
   aboutLink.textContent = t("help.about");
   const githubLink = document.createElement("a");
-  githubLink.href = "https://github.com/heyyeah/surface-browser-web";
+  githubLink.href = "https://github.com/heyyeah/surface-browser";
   githubLink.target = "_blank";
   githubLink.rel = "noopener noreferrer";
   githubLink.className = "shortcut-github";

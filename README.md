@@ -6,19 +6,42 @@ stream toward you through a curving tunnel, which opens into an interactive
 sphere of those images. Rotate the sphere, select an image, and you travel
 onward to whatever it links to.
 
-This repository is the Three.js / WebXR version and the Node service that feeds
-it. It runs in a desktop or mobile browser and in VR on Meta Quest (2, 3, 3S) and
-Pico 4 Ultra.
+There are two ways to use it:
+
+- **On the web** at <https://sb.boxc.net>, on a desktop or mobile browser and in
+  VR on Meta Quest (2, 3, 3S) and Pico 4 Ultra.
+- **As a desktop app** that runs it on your own computer, where it can use your
+  own image search keys and your own local AI image model, for example
+  [Draw Things](https://drawthings.ai).
+
+This repository is the source of both: the Three.js / WebXR page and the Node
+service that feeds it.
 [About the work](https://boxc.net/surfacebrowser.html)
 
 ## Mac app
 
-**[Download for Mac](https://github.com/heyyeah/surface-browser-web/releases/latest/download/Surface-Browser-mac-arm64.dmg)**
-(Apple silicon, signed and notarized). Open it, drag the app to Applications,
-and it updates itself. It is this repository's web version running on your
-computer; settings and Windows build steps are in [`desktop/README.md`](desktop/README.md).
+**[Download for Mac](https://github.com/heyyeah/surface-browser/releases/latest/download/Surface-Browser-mac-arm64.dmg)**
+(Apple silicon, signed and notarized). Open it, drag Surface Browser to
+Applications, and it updates itself. This is the easiest way to run Surface
+Browser on your own computer: nothing to install or build first.
 
-## Run it locally
+Web addresses work straight away. Image search and AI images are set up in the
+app's settings panel, or in a `.env` file in its data folder; see
+[`desktop/README.md`](desktop/README.md), which also has the Windows build steps.
+
+## Run from source
+
+For everything the app does not do: VR in your own headset, Windows or an Intel
+Mac, voice input, hosting it for other people, or changing the code.
+
+| | Mac app | From source |
+|---|---|---|
+| On this computer | yes | yes |
+| VR headset | no | yes, over an HTTPS tunnel |
+| Host it for others | no | yes |
+| Voice input | no | yes |
+| Windows, Intel Mac | no (Windows: build it yourself) | yes |
+| Updates | automatic | `git pull` |
 
 Needs Node 24+ from https://nodejs.org/ (see `.nvmrc`).
 
@@ -35,8 +58,8 @@ Open <http://localhost:5173>. Web addresses work with no keys at all.
 - **Image search** needs a provider key in `.env` (Serper, Brave, or your own
   endpoint).
 - **AI images** are off until you configure a provider: a hosted one (fal) or a
-  local one that speaks the Stable Diffusion WebUI API (AUTOMATIC1111,
-  Draw Things). Ideally one that allows editing images such as Flux 2 Klein.
+  local one that speaks the Stable Diffusion WebUI API (Draw Things,
+  AUTOMATIC1111). Ideally one that allows editing images such as Flux 2 Klein.
 - **Pages that build their images with JavaScript** need the optional browser
   renderer: `npx playwright install chromium`, then `PLAYWRIGHT_ENABLED=1`.
 

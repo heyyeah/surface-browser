@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'heyyeah/surface-browser-web'
+    if: github.repository == 'heyyeah/surface-browser'
     runs-on: macos-15 # Apple silicon
     timeout-minutes: 45
     steps:

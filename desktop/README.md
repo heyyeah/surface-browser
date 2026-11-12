@@ -6,8 +6,8 @@ Mac. It behaves like the web version running locally, settings panel included.
 
 ## macOS (Apple silicon)
 
-Download [`Surface-Browser-mac-arm64.dmg`](https://github.com/heyyeah/surface-browser-web/releases/latest/download/Surface-Browser-mac-arm64.dmg)
-from the [latest release](https://github.com/heyyeah/surface-browser-web/releases/latest),
+Download [`Surface-Browser-mac-arm64.dmg`](https://github.com/heyyeah/surface-browser/releases/latest/download/Surface-Browser-mac-arm64.dmg)
+from the [latest release](https://github.com/heyyeah/surface-browser/releases/latest),
 open it and drag the app to Applications. It is signed and notarized, and it
 updates itself when a new release is published.
 
@@ -21,8 +21,8 @@ There is no download for Windows yet. To build the installer yourself:
 2. In a terminal:
 
    ```
-   git clone https://github.com/heyyeah/surface-browser-web.git
-   cd surface-browser-web
+   git clone https://github.com/heyyeah/surface-browser.git
+   cd surface-browser
    npm ci
    cd desktop
    npm ci

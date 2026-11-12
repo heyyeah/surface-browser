@@ -31,6 +31,14 @@ mac:
   # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID when they are set.
 dmg:
   artifactName: Surface-Browser-mac-${arch}.${ext}
+  # build-resources/background.png (+ @2x), drawn by make-dmg-background.mjs: the
+  # arrow runs between the two icon positions below.
+  background: build-resources/background.png
+  window: { width: 660, height: 400 }
+  iconSize: 128
+  contents:
+    - { x: 180, y: 200, type: file }
+    - { x: 480, y: 200, type: link, path: /Applications }
 win:
   target:
     - target: nsis
@@ -41,7 +49,7 @@ nsis:
 publish:
   provider: github
   owner: heyyeah
-  repo: surface-browser-web
+  repo: surface-browser
   # The workflow creates the draft first and publishes it once every file is up:
   # the DMG and zip upload in parallel, and both tried to create the release.
   releaseType: draft
