@@ -3,6 +3,7 @@ dist/
 .DS_Store
 .env
 server/settings.local.json
+server/favourites.local.json
 server/query.log
 bakeoff-results/
 generated-images/

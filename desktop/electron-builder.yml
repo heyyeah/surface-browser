@@ -44,6 +44,9 @@ win:
     - target: nsis
       arch: x64
 nsis:
+  # Unversioned like the DMG. Updates still work: latest.yml names this file, and
+  # the release tag in its URL carries the version.
+  artifactName: Surface-Browser-win-${arch}-setup.${ext}
   oneClick: false
   perMachine: false
 publish:

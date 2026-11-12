@@ -29,10 +29,7 @@ export function initQueryLog(deps) {
 }
 
 export function getApiQueryLogFilePath() {
-  if (API_QUERY_LOG_FILE instanceof URL) {
-    return decodeURIComponent(API_QUERY_LOG_FILE.pathname);
-  }
-  return path.resolve(String(API_QUERY_LOG_FILE));
+  return resolveFilePath(API_QUERY_LOG_FILE);
 }
 
 export function logApiQuery(eventType, details = {}) {

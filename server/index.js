@@ -5,6 +5,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { setupStt, isSttEnabled } from "./stt.js";
 import { recommendedStepsSummary } from "./model-profiles.js";
 import {
@@ -62,6 +63,7 @@ import {
   replaceSettingsOverrides,
   validateSettingsUpdate
 } from "./settings.js";
+import { loadFavourites, resetFavourites, saveFavourites } from "./favourites.js";
 import { createConcurrencyGuard } from "./concurrency-guard.js";
 import { extractCacheKey, handleExtract, isPlaywrightEnabled, readCachedExtract } from "./extract.js";
 import { handleImageSearch, initSearch, searchResultCache } from "./search.js";
@@ -257,7 +259,7 @@ initSearch({ killSwitch, spendGuard, getSpendClientKey });
 initGenAiJobs({ killSwitch, spendGuard, getSpendClientKey, genAiPromptCache });
 
 // clients/browser -> clients -> repo root.
-const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..", "..");
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 // What this process booted at; fixed for its lifetime.
 const GIT_BUILD_AT_BOOT = readGitBuild();
 // What is checked out now. Cached briefly: /api/health is polled, but a deploy
@@ -516,6 +518,40 @@ app.put("/api/settings", (req, res) => {
   }
 });
 
+// Favourites editing rides on settings: absent where settings are hidden (the
+// public site), written under the same gate.
+app.use("/api/favourites", (req, res, next) => {
+  if (HIDE_SETTINGS) {
+    res.status(404).json({ error: "Favourites are disabled" });
+    return;
+  }
+  next();
+});
+
+app.get("/api/favourites", (_req, res) => {
+  res.json({ ok: true, ...loadFavourites() });
+});
+
+app.put("/api/favourites", (req, res) => {
+  if (!canWriteSettings(req)) {
+    res.status(403).json({ error: "Favourites are read-only on this deployment" });
+    return;
+  }
+  try {
+    res.json({ ok: true, ...saveFavourites(req.body?.favourites) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/favourites", (req, res) => {
+  if (!canWriteSettings(req)) {
+    res.status(403).json({ error: "Favourites are read-only on this deployment" });
+    return;
+  }
+  res.json({ ok: true, ...resetFavourites() });
+});
+
 app.post("/api/settings/test", async (req, res) => {
   if (!canWriteSettings(req)) {
     res.status(403).json({ error: "Settings tests are disabled on this deployment" });
@@ -719,7 +755,7 @@ app.get("/admin/generated/image/:name", localOnlyGate, (req, res) => {
     return;
   }
   res.setHeader("cache-control", "private, max-age=3600");
-  res.sendFile(filePath instanceof URL ? decodeURIComponent(filePath.pathname) : filePath);
+  res.sendFile(resolveFilePath(filePath));
 });
 
 // Where admin rows link to: the public site on the box, the Vite dev server here.
@@ -1161,10 +1197,7 @@ function getSettingsMeta() {
 }
 
 function getScreenshotsDirPath() {
-  if (SCREENSHOTS_DIR instanceof URL) {
-    return decodeURIComponent(SCREENSHOTS_DIR.pathname);
-  }
-  return path.resolve(String(SCREENSHOTS_DIR));
+  return resolveFilePath(SCREENSHOTS_DIR);
 }
 
 // 404, not 403: same convention as the dev routes and /admin/pool, so a scanner

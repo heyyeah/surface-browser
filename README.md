@@ -1,6 +1,6 @@
 # Surface Browser
 
-Surface Browser is an immersive 3D web browser art piece by Tim Plaisted. Enter
+Surface Browser is an immersive 3D web browser art piece I started in 2003. Enter
 a web address, an image search or an AI image prompt, and the images found
 stream toward you through a curving tunnel, which opens into an interactive
 sphere of those images. Rotate the sphere, select an image, and you travel
@@ -12,35 +12,39 @@ There are two ways to use it:
   VR on Meta Quest (2, 3, 3S) and Pico 4 Ultra.
 - **As a desktop app** that runs it on your own computer, where it can use your
   own image search keys and your own local AI image model, for example
-  [Draw Things](https://drawthings.ai).
+  [Draw Things](https://drawthings.ai) on a Mac.
 
-This repository is the source of both: the Three.js / WebXR page and the Node
-service that feeds it.
-[About the work](https://boxc.net/surfacebrowser.html)
+The 2003 original was commissioned by NESTA UK and written in Java with
+OpenGL / JOGL. This repository is the source of the updated
+port (Three.js / Node) that I made for the new web, VR, mobile and desktop
+versions. [About the work](https://boxc.net/surfacebrowser.html).
 
-## Mac app
+## Desktop apps
 
 **[Download for Mac](https://github.com/heyyeah/surface-browser/releases/latest/download/Surface-Browser-mac-arm64.dmg)**
-(Apple silicon, signed and notarized). Open it, drag Surface Browser to
-Applications, and it updates itself. This is the easiest way to run Surface
-Browser on your own computer: nothing to install or build first.
+(Apple silicon). Open it and drag Surface Browser to Applications.
+
+**[Download for Windows](https://github.com/heyyeah/surface-browser/releases/latest/download/Surface-Browser-win-x64-setup.exe)**
+(64-bit). The installer is not signed yet, so Windows asks you to confirm the
+first time: **More info**, then **Run anyway**.
+
+This is the easiest way to run Surface Browser on your
+own computer.
 
 Web addresses work straight away. Image search and AI images are set up in the
-app's settings panel, or in a `.env` file in its data folder; see
-[`desktop/README.md`](desktop/README.md), which also has the Windows build steps.
+app's settings panel, or in a `.env` file in its data folder; see [`desktop/README.md`](desktop/README.md).
 
 ## Run from source
 
-For everything the app does not do: VR in your own headset, Windows or an Intel
-Mac, voice input, hosting it for other people, or changing the code.
+For everything the apps do not do: VR in your own headset, an Intel Mac, voice input, hosting it for other people, or changing the code.
 
-| | Mac app | From source |
+| | Desktop app | From source |
 |---|---|---|
-| On this computer | yes | yes |
+| Run locally on your computer | yes | yes |
 | VR headset | no | yes, over an HTTPS tunnel |
 | Host it for others | no | yes |
 | Voice input | no | yes |
-| Windows, Intel Mac | no (Windows: build it yourself) | yes |
+| Intel Mac | no | yes |
 | Updates | automatic | `git pull` |
 
 Needs Node 24+ from https://nodejs.org/ (see `.nvmrc`).
@@ -59,7 +63,7 @@ Open <http://localhost:5173>. Web addresses work with no keys at all.
   endpoint).
 - **AI images** are off until you configure a provider: a hosted one (fal) or a
   local one that speaks the Stable Diffusion WebUI API (Draw Things,
-  AUTOMATIC1111). Ideally one that allows editing images such as Flux 2 Klein.
+  AUTOMATIC1111). Ideally a model that can also edit images, such as FLUX.2 [klein].
 - **Pages that build their images with JavaScript** need the optional browser
   renderer: `npx playwright install chromium`, then `PLAYWRIGHT_ENABLED=1`.
 
@@ -79,6 +83,16 @@ on the page, or the Help button in VR, for the controls. A tunnel other than
 ngrok needs its hostname in `VITE_ALLOWED_HOSTS`. Anyone with the tunnel address
 can use your provider keys while it is open.
 
+## History
+
+<p align="center">
+  <img src="https://boxc.net/media/SurfaceBrowser_Wired.jpg" height="170" alt="2003 screenshot of the Java version: the Wired website wrapped around the inside of a blue tunnel, with an address bar below">
+  <img src="https://boxc.net/media/SurfaceBrowser_ACMI1.jpg" height="170" alt="A visitor at a console in a dark gallery, facing a projection of the blue tunnel">
+  <img src="https://boxc.net/media/surface_browser_installation_shot_exhibition.jpg" height="170" alt="Gallery view at ZKM: a large projection of the blue image tunnel, with a control console on a plinth in front of it">
+  <br>
+  The NESTA version browsing Wired, 2003 · ACMI, Melbourne, 2004 · ZKM Karlsruhe, 2025
+</p>
+
 ## Hosting it
 
 `npm run build` writes the static site to `dist/`. Serve that and proxy
@@ -92,22 +106,24 @@ open internet, read the "Hardening for a public host" section of
 npm test
 ```
 
-## Layout
-
-- `index.html`, `src/` — the WebXR / Three.js page
-- `server/` — page extraction, image proxy, search, AI relay, speech to text
-- `shared/` — code used by both
-- `scripts/` — the test suite and AI image tooling
-
 ## Contributing
 
-This repository is a published snapshot; development happens elsewhere and
-arrives here as one commit per release. Issues and pull requests are welcome,
-and accepted changes are carried across by hand, so a merged contribution shows
-up in the next release rather than as your commit.
+This is a published copy of my working repository. Issues and pull requests are
+welcome; accepted changes are carried across by hand, so a merged contribution
+shows up, with credit, in the next release.
+
+## Thanks and credits
+
+Additional support from ACMI and ZKM Karlsruhe. Thanks to Maria Stark at NESTA.
+
+- Artist: Tim Plaisted
+- Code: Tim Plaisted, Ryan Hodge (rendering, 2003), Nick Kaltner (networking,
+  2003), Ivan Shuba (2024 update)
+
+Shown at NESTA, Switch Media, ACMI, IMA, MAAP Festival and ZKM.
 
 ## Licence
 
-The software is MIT licensed: see `LICENSE`. The artwork — the name, the visual
-and spatial design, and any images shipped with a release — is licensed
+The software is MIT licensed: see `LICENSE`. The artwork (the name, the visual
+and spatial design, and any images shipped with a release) is licensed
 separately under CC BY-NC-SA 4.0: see `LICENSE-ART`.

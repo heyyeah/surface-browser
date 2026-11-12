@@ -1,0 +1,160 @@
+# Builds and publishes the Mac and Windows apps when run by hand (Actions >
+# Desktop app > Run workflow) on the public repo. Each run is one GitHub
+# Release, which is what the apps' auto-update reads. Lives at the root of the
+# public repo only (exported from clients/browser/.github in the source repo,
+# where GitHub ignores it).
+#
+# Repository secrets (Settings > Secrets and variables > Actions), Mac only:
+#   MAC_CERT_P12_BASE64         Developer ID Application certificate + key, .p12, base64
+#   MAC_CERT_PASSWORD           the .p12's password
+#   APPLE_ID                    the Apple Account that notarizes
+#   APPLE_APP_SPECIFIC_PASSWORD an app-specific password for it (account.apple.com)
+#   APPLE_TEAM_ID               the 10-character team ID
+# The Windows installer is not signed yet.
+
+name: Desktop app
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, e.g. 0.2.0 (must be higher than the last release)"
+        required: true
+
+permissions:
+  contents: write # create the release
+
+concurrency:
+  group: desktop
+  cancel-in-progress: false
+
+jobs:
+  # One draft for both builds to upload into: in parallel, each would otherwise
+  # try to create the release.
+  release:
+    if: github.repository == 'heyyeah/surface-browser'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::version must look like 0.2.0"; exit 1; }
+          # Drafts can share a tag, and the builds would upload to either one.
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "::error::release v$VERSION already exists: re-run the failed jobs, or delete the draft first"
+            exit 1
+          fi
+          gh release create "v$VERSION" --draft --title "$VERSION" --target "$GITHUB_SHA" \
+            --notes "Surface Browser $VERSION for Mac (Apple silicon) and Windows (x64)."
+
+  mac:
+    needs: release
+    if: github.repository == 'heyyeah/surface-browser'
+    runs-on: macos-15 # Apple silicon
+    timeout-minutes: 45
+    steps:
+      # Actions pinned to commits, not tags: a moved tag cannot change what runs
+      # with the signing secrets.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install
+        run: |
+          npm ci --no-audit --no-fund
+          npm --prefix desktop ci --no-audit --no-fund
+      - name: Test
+        run: npm test
+      - name: Version
+        working-directory: desktop
+        env:
+          VERSION: ${{ inputs.version }}
+        run: npm version --no-git-tag-version "$VERSION"
+      - name: Test renderer
+        run: npm --prefix desktop run test:renderer
+      - name: Stage
+        working-directory: desktop
+        run: npm run stage
+      - name: Sign, notarize, publish
+        working-directory: desktop
+        env:
+          CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Without the secrets electron-builder would publish an unsigned build,
+        # and auto-update would offer it to everyone.
+        run: |
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            [ -n "${!name}" ] || { echo "::error::secret for $name is not set"; exit 1; }
+          done
+          npm run publish:mac
+
+  windows:
+    needs: release
+    if: github.repository == 'heyyeah/surface-browser'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The runner's git checks out CRLF; tests read source text and match "\n".
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install
+        run: |
+          npm ci --no-audit --no-fund
+          npm --prefix desktop ci --no-audit --no-fund
+      - name: Test
+        run: npm test
+      - name: Version
+        working-directory: desktop
+        env:
+          VERSION: ${{ inputs.version }}
+        run: npm version --no-git-tag-version "$VERSION"
+      - name: Test renderer
+        run: npm --prefix desktop run test:renderer
+      - name: Stage
+        working-directory: desktop
+        run: npm run stage
+      - name: Publish
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run publish:win
+
+  # Auto-update reads latest-mac.yml / latest.yml from the newest published
+  # release, so the release goes public only after both builds are uploaded.
+  publish:
+    needs: [mac, windows]
+    if: github.repository == 'heyyeah/surface-browser'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        # The two installers are the README's fixed download links.
+        run: |
+          assets="$(gh release view "v$VERSION" --json assets -q '.assets[].name')"
+          for name in latest-mac.yml latest.yml Surface-Browser-mac-arm64.dmg Surface-Browser-win-x64-setup.exe; do
+            grep -qx "$name" <<<"$assets" || { echo "::error::$name was not uploaded"; exit 1; }
+          done
+          gh release edit "v$VERSION" --draft=false --latest

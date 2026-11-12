@@ -14,7 +14,7 @@
 // (loadAndExtractUrl / loadImageSearch / loadGenAiPrompt).
 
 import * as THREE from "three";
-import { DEFAULT_BOOKMARKS, BookmarkKind, bookmarkTitle, startFavoriteBookmarks } from "./bookmarks.js";
+import { BookmarkKind, bookmarkTitle, currentFavourites, startFavoriteBookmarks } from "./bookmarks.js";
 import { canGoBack, goBack, loadAndExtractUrl, loadGenAiPrompt, loadImageSearch } from "./api.js";
 import { bookmarkGridLayout, bookmarkUrlLine } from "./vrpanel-grid.js";
 import { gazeYawFromForward, idleAnchorTargetYaw, stepIdleAnchorYaw } from "./idle-anchor.js";
@@ -505,7 +505,7 @@ function modeEnabled(mode) {
 // disabled-GenAI mode selection yields an empty grid, never live GenAI cells).
 function visibleBookmarks() {
   const kind = activeMode().kind;
-  return DEFAULT_BOOKMARKS.filter((bookmark) => {
+  return currentFavourites().filter((bookmark) => {
     if (bookmark.kind !== kind) {
       return false;
     }
@@ -3617,6 +3617,12 @@ function setVrPanelGenAiEnabled(enabled) {
     drawPanel();
   }
 }
+
+window.addEventListener("surface-browser:favourites-changed", () => {
+  if (panelVisible) {
+    drawPanel();
+  }
+});
 
 // Wrist launcher bridge
 // The launcher is a summon surface, not a second menu: it owns no panel state and

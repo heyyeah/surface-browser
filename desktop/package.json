@@ -12,6 +12,7 @@
     "dist:mac": "npm run stage && electron-builder --mac --publish never",
     "dist:win": "npm run stage && electron-builder --win --publish never",
     "publish:mac": "electron-builder --mac --publish always",
+    "publish:win": "electron-builder --win --publish always",
     "release:mac": "npm run stage && npm run publish:mac",
     "test:renderer": "electron test/renderer-e2e.mjs"
   },

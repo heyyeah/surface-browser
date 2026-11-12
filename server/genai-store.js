@@ -10,7 +10,7 @@ import {
   PROXY_IMAGE_MAX_EDGE_PX,
   rasterizeSvg
 } from "./images.js";
-import { firstString, parseNonNegativeInteger, parsePositiveInteger } from "./env.js";
+import { firstString, parseNonNegativeInteger, parsePositiveInteger, resolveFilePath } from "./env.js";
 import { isAllowedImageUrl, isAllowedLink, parseDimension } from "./extract.js";
 import { GenAiSourceTooLargeError, RequestPolicyError, sendPolicyError } from "./errors.js";
 import {
@@ -131,10 +131,7 @@ export function getGenAiImageCacheTtlMs() {
 }
 
 export function getGeneratedImagesDirDisplayPath() {
-  if (GENERATED_IMAGES_DIR instanceof URL) {
-    return decodeURIComponent(GENERATED_IMAGES_DIR.pathname);
-  }
-  return path.resolve(String(GENERATED_IMAGES_DIR));
+  return resolveFilePath(GENERATED_IMAGES_DIR);
 }
 
 export function measureRasterImageSize(buffer) {

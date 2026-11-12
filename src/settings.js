@@ -40,11 +40,15 @@ const GENAI_VARY_MODIFIER_PAYLOADS = [
   { value: "text", label: "Text phrase" },
   { value: "emoji", label: "Raw emoji" }
 ];
-const GENAI_TIP = "Easiest local: install Draw Things (free, Mac App Store), download a model "
-  + "(FLUX.1 schnell is the current recommendation), enable Settings -> API Server, and pick "
-  + "\"Draw Things\" here. Self-hosted server: run AUTOMATIC1111 / SD.Next / Forge on your box "
+// Draw Things is Mac and iOS only.
+const IS_WINDOWS = typeof navigator !== "undefined" && /Windows/.test(navigator.userAgent);
+const GENAI_TIP_DRAW_THINGS = "Easiest local: install Draw Things (free, Mac App Store), download a model "
+  + "(FLUX.2 [klein] 4B is the current recommendation), enable Settings -> API Server, and pick "
+  + "\"Draw Things\" here. ";
+const GENAI_TIP = (IS_WINDOWS ? "" : GENAI_TIP_DRAW_THINGS)
+  + "Self-hosted server: run AUTOMATIC1111 / SD.Next / Forge on your box "
   + "or cloud GPU and pick \"A1111 server\" with its URL. Hosted API: create a fal.ai key and "
-  + "pick \"Hosted (fal.ai)\" - fastest setup, pay per image. Anything else: \"Custom endpoint\".";
+  + "pick \"Hosted (fal.ai)\", pay per image. Anything else: \"Custom endpoint\".";
 
 // The tunnel footer's batch size before the server has answered.
 const DEFAULT_GENAI_COUNT = 5;
@@ -276,6 +280,9 @@ function buildField(key, labelText, hint) {
   if (descriptor.control === "select") {
     input = makeEl("select", null, { id: fieldId });
     for (const option of descriptor.options) {
+      if (IS_WINDOWS && option.value === "drawthings" && entry.value !== "drawthings") {
+        continue;
+      }
       const opt = makeEl("option", null, { value: option.value, text: option.label });
       if (String(entry.value ?? "") === option.value) {
         opt.selected = true;
@@ -733,7 +740,7 @@ function buildGenAiSection() {
   const apiKeyField = buildField(
     "GENAI_API_KEY",
     "Provider API key",
-    "For hosted providers (fal.ai) or auth-protected remote servers. Leave empty for local Draw Things."
+    "For hosted providers (fal.ai) or auth-protected remote servers. Leave empty for local servers."
   );
   details.appendChild(apiKeyField);
 
@@ -840,9 +847,6 @@ function buildGenAiSection() {
 function buildImageSearchSection() {
   const section = makeEl("section", "settings-section");
   section.appendChild(makeEl("h3", null, { text: "Image search" }));
-  section.appendChild(makeEl("div", "settings-hint", {
-    text: "Unset defaults to DuckDuckGo (no key). Museum-safe mode forces strict-safe flags when enabled."
-  }));
 
   section.appendChild(buildField("IMAGE_SEARCH_PROVIDER", "Provider"));
   const endpointField = buildField("IMAGE_SEARCH_ENDPOINT", "Custom endpoint");
@@ -889,13 +893,12 @@ function buildInterfaceSection() {
   section.appendChild(makeEl("h3", null, { text: "Interface" }));
   section.appendChild(buildField(
     "SHOW_STATUS_FOOTER",
-    "Show status footer",
-    "Shows public loading progress and the selected sphere image identity in flat and VR modes."
+    "Show status bar"
   ));
   section.appendChild(buildField(
     "SHOW_IMAGE_LIST",
     "Show image list (flat mode)",
-    "Lists every extracted image URL and its link under the canvas on desktop. Turn off for a clean view when presenting or exhibiting; it has no effect in VR."
+    "Lists every extracted image URL and its link under the canvas on desktop. Not shown in VR."
   ));
   return section;
 }
@@ -1081,4 +1084,5 @@ async function setupSettings({ onSaved, enabled = true } = {}) {
   });
 }
 
-export { setupSettings, openSettings, isSettingsOpen, genAiBatchCount };
+// The admin token typed into Settings also authorises favourites writes.
+export { setupSettings, openSettings, isSettingsOpen, genAiBatchCount, requestHeaders as settingsRequestHeaders };

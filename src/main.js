@@ -9,6 +9,7 @@ import {
   bookmarkModeLabel,
   bookmarkTitle,
   isGenAiBookmarksEnabled,
+  loadFavourites,
   setBookmarksMenuOpen,
   setGenAiBookmarksEnabled,
   setupBookmarks,
@@ -333,6 +334,16 @@ function omnibarModeForBookmarkKind(kind) {
     return "genai";
   }
   return "url";
+}
+
+function bookmarkKindForOmnibarMode(mode) {
+  if (mode === "image_search") {
+    return BookmarkKind.IMAGE_SEARCH;
+  }
+  if (mode === "genai") {
+    return BookmarkKind.GENAI_PROMPT;
+  }
+  return BookmarkKind.WEB_PAGE;
 }
 
 function updateModeToggleUi() {
@@ -1066,6 +1077,10 @@ modeGenAiBtn?.addEventListener("click", () => {
   }
 });
 
+window.addEventListener("surface-browser:favourites-changed", () => {
+  renderStartPanel();
+});
+
 window.addEventListener("surface-browser:bookmark-activated", (event) => {
   setActiveOmnibarMode(omnibarModeForBookmarkKind(event.detail?.kind));
   // Every route into a load closes the start panel, including the bookmarks dropdown.
@@ -1157,7 +1172,12 @@ for (const inputEventType of ["pointerdown", "pointermove", "keydown", "touchsta
 }
 markUserInput();
 startXrDiagnostics();
-setupBookmarks();
+setupBookmarks({
+  getCurrentEntry: () => ({
+    kind: bookmarkKindForOmnibarMode(activeOmnibarMode),
+    value: (urlInput.value || "").trim()
+  })
+});
 // Before the first render of anything with words in it: applyStaticTranslations
 // rewrites the markup's English in place and renderShortcutsMenu reads t() as it
 // builds.
@@ -1246,6 +1266,8 @@ await setupSettings({
   // A server too old to say probes as before.
   enabled: bootCapabilities?.settings?.enabled !== false
 });
+// Before the first start-screen render, so it never draws from the built-ins first.
+await loadFavourites({ enabled: bootCapabilities?.settings?.enabled !== false });
 await configureApiCapabilities(bootCapabilities);
 
 const startupParams = new URLSearchParams(window.location.search);

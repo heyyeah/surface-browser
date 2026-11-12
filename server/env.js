@@ -1,4 +1,5 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export function parseNonNegativeInteger(raw, defaultValue) {
   if (raw === undefined || raw === null || raw === "") {
@@ -113,7 +114,7 @@ export function clampNumber(raw, min, max, defaultValue) {
 // checkout does not wipe state.
 export function resolveFilePath(value) {
   if (value instanceof URL) {
-    return decodeURIComponent(value.pathname);
+    return fileURLToPath(value); // not .pathname: "/C:/..." on Windows
   }
   return path.resolve(String(value));
 }

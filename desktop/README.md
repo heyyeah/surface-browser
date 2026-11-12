@@ -1,8 +1,8 @@
 # Surface Browser desktop app
 
 The web version packaged as an app for macOS and Windows: the same server and
-client, running on your computer, with nothing to install or build first on a
-Mac. It behaves like the web version running locally, settings panel included.
+client, running on your computer, with nothing to install or build first. It
+behaves like the web version running locally, settings panel included.
 
 ## macOS (Apple silicon)
 
@@ -13,9 +13,15 @@ updates itself when a new release is published.
 
 Intel Macs are not supported by the download; build it yourself as below.
 
-## Windows
+## Windows (x64)
 
-There is no download for Windows yet. To build the installer yourself:
+Download [`Surface-Browser-win-x64-setup.exe`](https://github.com/heyyeah/surface-browser/releases/latest/download/Surface-Browser-win-x64-setup.exe)
+from the [latest release](https://github.com/heyyeah/surface-browser/releases/latest)
+and run it. The installer is not signed yet, so Windows SmartScreen warns about
+it: choose **More info**, then **Run anyway**. The app updates itself when a new
+release is published.
+
+To build the installer yourself:
 
 1. Install [Node.js 24 LTS](https://nodejs.org/) and [Git](https://git-scm.com/).
 2. In a terminal:
@@ -29,9 +35,7 @@ There is no download for Windows yet. To build the installer yourself:
    npm run dist:win
    ```
 
-3. Run `desktop\build\dist\Surface Browser Setup <version>.exe`. The installer
-   is not signed, so Windows SmartScreen warns about it: choose **More info**,
-   then **Run anyway**.
+3. Run `desktop\build\dist\Surface-Browser-win-x64-setup.exe`.
 
 `npm start` (in `desktop`) runs the app without installing it.
 
@@ -71,10 +75,13 @@ checks this against a hostile page.
 
 ## Releases (maintainer)
 
-`.github/workflows/desktop-mac.yml` builds, signs, notarizes and publishes the
-Mac app as release `v<version>`. Run it by hand from Actions > Desktop app
-(macOS) > Run workflow, with a version higher than the last release, or
-installed apps will not update. It needs these repository secrets:
+`.github/workflows/desktop.yml` builds and publishes both apps as release
+`v<version>`: the Mac app signed and notarized, the Windows installer unsigned.
+Run it by hand from Actions > Desktop app > Run workflow, with a version higher
+than the last release, or installed apps will not update. It creates a draft,
+both builds upload into it, and it is published only once both are complete.
+If one build fails, the draft stays unpublished: re-run the failed jobs. The
+Mac build needs these repository secrets:
 
 | Secret | What |
 |---|---|

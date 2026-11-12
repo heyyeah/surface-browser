@@ -18,6 +18,12 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = fs.existsSync(path.join(HERE, "server")) ? HERE : path.resolve(HERE, "..");
 const importFrom = (rel) => import(pathToFileURL(path.join(ROOT, rel)).href);
 
+// Windows shows notifications (the update one) only for the app ID that the
+// installer's shortcut carries.
+if (process.platform === "win32") {
+  app.setAppUserModelId("net.boxc.surfacebrowser");
+}
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 }
@@ -69,6 +75,7 @@ async function configureServerEnv(port) {
   const at = (name) => path.join(data, name);
   const defaults = {
     SETTINGS_FILE_PATH: at("settings.json"),
+    FAVOURITES_FILE_PATH: at("favourites.json"),
     SPEND_STATE_PATH: at("spend-state.json"),
     KILL_SWITCH_PATH: at("KILL_SWITCH"),
     LIVE_STATS_PATH: at("live-stats.json"),
@@ -157,7 +164,7 @@ function createWindow() {
 }
 
 async function checkForUpdates() {
-  if (!app.isPackaged || process.platform !== "darwin") {
+  if (!app.isPackaged || !["darwin", "win32"].includes(process.platform)) {
     return;
   }
   try {
