@@ -49,7 +49,7 @@ jobs:
             exit 1
           fi
           gh release create "v$VERSION" --draft --title "$VERSION" --target "$GITHUB_SHA" \
-            --notes "Surface Browser $VERSION for Mac (Apple silicon) and Windows (x64)."
+            --notes "Surface Browser $VERSION for Mac (Apple silicon) and Windows (x64). Code signing policy: https://github.com/heyyeah/surface-browser#code-signing-policy"
 
   mac:
     needs: release

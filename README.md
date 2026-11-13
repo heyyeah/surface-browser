@@ -26,7 +26,8 @@ versions. [About the work](https://boxc.net/surfacebrowser.html).
 
 **[Download for Windows](https://github.com/heyyeah/surface-browser/releases/latest/download/Surface-Browser-win-x64-setup.exe)**
 (64-bit). The installer is not signed yet, so Windows asks you to confirm the
-first time: **More info**, then **Run anyway**.
+first time: **More info**, then **Run anyway**. See the
+[code signing policy](#code-signing-policy).
 
 This is the easiest way to run Surface Browser on your
 own computer.
@@ -112,9 +113,33 @@ This is a published copy of my working repository. Issues and pull requests are
 welcome; accepted changes are carried across by hand, so a merged contribution
 shows up, with credit, in the next release.
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://signpath.io), certificate
+by [SignPath Foundation](https://signpath.org). (The Windows build is not
+signed yet; the application is in progress.)
+
+- Committers and reviewers: [Tim Plaisted](https://github.com/heyyeah)
+- Approvers: [Tim Plaisted](https://github.com/heyyeah)
+
+Only Windows releases built by this repository's GitHub workflow are signed.
+
+**Privacy.** This program will not transfer any information to other networked
+systems unless you ask it to. When you do:
+
+- web addresses you enter are fetched from those sites;
+- image searches go to DuckDuckGo, or to the search provider you set up
+  ([DuckDuckGo privacy policy](https://duckduckgo.com/privacy));
+- AI image prompts go to the image service you set up, if any;
+- the desktop app checks GitHub for updates
+  ([GitHub privacy statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement)).
+
+To uninstall on Windows, use **Settings → Apps → Installed apps**. On a Mac,
+drag Surface Browser from Applications to the Bin.
+
 ## Thanks and credits
 
-Additional support from ACMI and ZKM Karlsruhe. Thanks to Maria Stark at NESTA.
+Additional support from ACMI, IMA and ZKM Karlsruhe. Thanks to Maria Stark at NESTA.
 
 - Artist: Tim Plaisted
 - Code: Tim Plaisted, Ryan Hodge (rendering, 2003), Nick Kaltner (networking,
@@ -124,6 +149,6 @@ Shown at NESTA, Switch Media, ACMI, IMA, MAAP Festival and ZKM.
 
 ## Licence
 
-The software is MIT licensed: see `LICENSE`. The artwork (the name, the visual
-and spatial design, and any images shipped with a release) is licensed
-separately under CC BY-NC-SA 4.0: see `LICENSE-ART`.
+Every file in this repository and in the downloads is MIT licensed: see
+`LICENSE`. The artwork (the name, and the visual and spatial design of the
+piece) is licensed separately under CC BY-NC-SA 4.0: see `LICENSE-ART`.
