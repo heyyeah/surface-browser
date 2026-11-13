@@ -1,6 +1,6 @@
 # Surface Browser
 
-Surface Browser is an immersive 3D web browser art piece I started in 2003. Enter
+Surface Browser is an experimental immersive 3D web browser art piece I started in 2003. Enter
 a web address, an image search or an AI image prompt, and the images found
 stream toward you through a curving tunnel, which opens into an interactive
 sphere of those images. Rotate the sphere, select an image, and you travel
@@ -115,9 +115,8 @@ shows up, with credit, in the next release.
 
 ## Code signing policy
 
-Free code signing provided by [SignPath.io](https://signpath.io), certificate
-by [SignPath Foundation](https://signpath.org). (The Windows build is not
-signed yet; the application is in progress.)
+Code signing application pending; for the moment the Windows installer is
+unsigned.
 
 - Committers and reviewers: [Tim Plaisted](https://github.com/heyyeah)
 - Approvers: [Tim Plaisted](https://github.com/heyyeah)

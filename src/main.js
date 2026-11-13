@@ -585,23 +585,35 @@ function renderShortcutsMenu() {
     parent.appendChild(title);
   };
 
-  // Where you start: the flat UI says nowhere else that a website, image search
-  // or a GenAI prompt can be the starting point.
-  const intro = document.createElement("p");
-  intro.className = "shortcut-intro";
-  intro.textContent = t(genAiAvailable ? "help.intro.genai" : "help.intro");
-  // (About) ends the intro sentence and stays in this tab; it is meant to become
-  // an overlay here.
-  const aboutLink = document.createElement("a");
-  aboutLink.href = "https://boxc.net/surfacebrowser.html";
-  aboutLink.textContent = t("help.about");
+  // Desktop downloads and the source come first. A desktop visitor sees the one
+  // build for their system; anyone else (phone, headset, Linux) sees both. The
+  // desktop app itself is already installed, so it shows only the repository.
+  const releases = "https://github.com/heyyeah/surface-browser/releases/latest/download/";
+  const ua = navigator.userAgent || "";
+  const inDesktopApp = /\bElectron\//.test(ua);
+  const os = isTouchPrimary() ? "" : /Windows/.test(ua) ? "win" : /Macintosh/.test(ua) ? "mac" : "";
+  const makeLink = (href, text) => {
+    const a = document.createElement("a");
+    a.href = href;
+    a.textContent = text;
+    return a;
+  };
+  const get = document.createElement("p");
+  get.className = "shortcut-intro shortcut-get";
+  if (!inDesktopApp) {
+    const apps = [];
+    if (os !== "win") apps.push(makeLink(`${releases}Surface-Browser-mac-arm64.dmg`, t("help.macApp")));
+    if (os !== "mac") apps.push(makeLink(`${releases}Surface-Browser-win-x64-setup.exe`, t("help.windowsApp")));
+    get.append(`${t("help.download")} `);
+    apps.forEach((a, i) => get.append(...(i ? [" · ", a] : [a])));
+    get.append(" · ");
+  }
   const githubLink = document.createElement("a");
   githubLink.href = "https://github.com/heyyeah/surface-browser";
   githubLink.target = "_blank";
   githubLink.rel = "noopener noreferrer";
   githubLink.className = "shortcut-github";
-  githubLink.setAttribute("aria-label", "GitHub");
-  githubLink.title = "GitHub";
+  githubLink.append(`${t("help.repo")} `);
   const svgNS = "http://www.w3.org/2000/svg";
   const githubIcon = document.createElementNS(svgNS, "svg");
   githubIcon.setAttribute("viewBox", "0 0 16 16");
@@ -611,7 +623,17 @@ function renderShortcutsMenu() {
   githubPath.setAttribute("d", "M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.37A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z");
   githubIcon.appendChild(githubPath);
   githubLink.appendChild(githubIcon);
-  intro.append(" (", aboutLink, ") ", githubLink);
+  get.append(githubLink, document.createElement("br"), t("help.openSource"));
+  shortcutsMenu.appendChild(get);
+
+  // Where you start: the flat UI says nowhere else that a website, image search
+  // or a GenAI prompt can be the starting point.
+  const intro = document.createElement("p");
+  intro.className = "shortcut-intro";
+  intro.textContent = t(genAiAvailable ? "help.intro.genai" : "help.intro");
+  // About ends the intro and stays in this tab; it is meant to become an overlay.
+  const aboutLink = makeLink("https://boxc.net/surfacebrowser.html", t("help.about"));
+  intro.append(" ", aboutLink);
   shortcutsMenu.appendChild(intro);
 
   // Organised by where you are (tunnel, sphere), not by device: the same gesture
