@@ -6,7 +6,7 @@
 // Pages that need JavaScript render in a hidden Electron window instead of
 // Playwright (page-renderer.mjs).
 
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, shell } from "electron";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -163,16 +163,148 @@ function createWindow() {
   void mainWindow.loadURL(origin);
 }
 
-async function checkForUpdates() {
-  if (!app.isPackaged || !["darwin", "win32"].includes(process.platform)) {
+// Update state has one writer, setUpdateState(). Values: "idle" | "checking" |
+// "downloading" | "ready". electron-updater downloads on its own once it finds
+// a newer release; "ready" lasts until the app restarts.
+let updateState = "idle";
+let updateVersion = "";
+let manualCheck = false;
+let updaterPromise = null;
+
+function setUpdateState(state, version = updateVersion) {
+  updateState = state;
+  updateVersion = version;
+}
+
+function updatesSupported() {
+  return app.isPackaged && ["darwin", "win32"].includes(process.platform);
+}
+
+function showMessage(options) {
+  const opts = { title: "Surface Browser", buttons: ["OK"], ...options };
+  return mainWindow ? dialog.showMessageBox(mainWindow, opts) : dialog.showMessageBox(opts);
+}
+
+async function promptRestart() {
+  const { response } = await showMessage({
+    type: "info",
+    message: `Surface Browser ${updateVersion} is ready to install.`,
+    detail: "Restart now to update, or it installs the next time you quit.",
+    buttons: ["Restart now", "Later"],
+    defaultId: 0,
+    cancelId: 1
+  });
+  if (response === 0) {
+    (await updaterPromise).autoUpdater.quitAndInstall();
+  }
+}
+
+function getUpdater() {
+  updaterPromise ??= import("electron-updater").then(({ default: updater }) => {
+    const { autoUpdater } = updater;
+    autoUpdater.on("update-available", (info) => {
+      setUpdateState("downloading", info.version);
+      if (manualCheck) {
+        manualCheck = false;
+        void showMessage({
+          type: "info",
+          message: `Downloading Surface Browser ${info.version}.`,
+          detail: "You will be asked to restart when it is ready."
+        });
+      }
+    });
+    autoUpdater.on("update-not-available", () => {
+      setUpdateState("idle");
+      if (manualCheck) {
+        manualCheck = false;
+        void showMessage({ type: "info", message: `Surface Browser ${app.getVersion()} is the latest version.` });
+      }
+    });
+    autoUpdater.on("update-downloaded", (info) => {
+      setUpdateState("ready", info.version);
+      void promptRestart();
+    });
+    autoUpdater.on("error", (err) => {
+      console.warn("Update check failed:", err?.message);
+      setUpdateState("idle");
+      if (manualCheck) {
+        manualCheck = false;
+        void showMessage({ type: "warning", message: "Could not check for updates.", detail: err?.message || "" });
+      }
+    });
+    return updater;
+  });
+  return updaterPromise;
+}
+
+async function checkForUpdates({ manual = false } = {}) {
+  if (!updatesSupported()) {
+    if (manual) {
+      void showMessage({ type: "info", message: "Updates work only in the installed app." });
+    }
     return;
   }
-  try {
-    const { default: updater } = await import("electron-updater");
-    await updater.autoUpdater.checkForUpdatesAndNotify();
-  } catch (err) {
-    console.warn("Update check failed:", err.message);
+  if (updateState === "ready") {
+    if (manual) {
+      void promptRestart();
+    }
+    return;
   }
+  if (updateState !== "idle") {
+    if (manual) {
+      void showMessage({
+        type: "info",
+        message: updateState === "downloading"
+          ? `Surface Browser ${updateVersion} is downloading.`
+          : "Already checking for updates."
+      });
+    }
+    return;
+  }
+  manualCheck = manual;
+  setUpdateState("checking");
+  try {
+    await (await getUpdater()).autoUpdater.checkForUpdates();
+  } catch (err) {
+    // The "error" event has already reported it.
+    if (updateState === "checking") {
+      setUpdateState("idle");
+    }
+  }
+}
+
+function buildMenu() {
+  const checkItem = { label: "Check for Updates…", click: () => void checkForUpdates({ manual: true }) };
+  const template = process.platform === "darwin"
+    ? [
+      {
+        role: "appMenu",
+        submenu: [
+          { role: "about" },
+          checkItem,
+          { type: "separator" },
+          { role: "services" },
+          { type: "separator" },
+          { role: "hide" },
+          { role: "hideOthers" },
+          { role: "unhide" },
+          { type: "separator" },
+          { role: "quit" }
+        ]
+      },
+      { role: "fileMenu" },
+      { role: "editMenu" },
+      { role: "viewMenu" },
+      { role: "windowMenu" }
+    ]
+    : [
+      { role: "fileMenu" },
+      { role: "editMenu" },
+      { role: "viewMenu" },
+      { role: "windowMenu" },
+      { role: "help", submenu: [checkItem, { role: "about" }] }
+    ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 app.on("second-instance", () => {
@@ -190,6 +322,7 @@ app.on("window-all-closed", () => {
 
 app.whenReady().then(async () => {
   origin = await startServer();
+  buildMenu();
   createWindow();
   void checkForUpdates();
 }).catch((err) => {

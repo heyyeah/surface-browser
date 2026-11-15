@@ -404,7 +404,17 @@ button.secondary {
   color: var(--mode-web, #6aa9ff);
 }
 
+/* The text is underlined; the gap before the mark is not. */
+.shortcut-intro a.shortcut-github {
+  text-decoration: none;
+}
+
+.shortcut-github span {
+  text-decoration: underline;
+}
+
 .shortcut-github svg {
+  margin-left: 0.35em;
   width: 1.15em;
   height: 1.15em;
   vertical-align: -0.2em;
@@ -1583,4 +1593,20 @@ details.settings-section:not([open]) {
   min-height: 1.3em;
   color: var(--muted);
   font-size: 0.85rem;
+}
+
+/* On a phone the open menus get the VR-unavailable dialog's scrim behind them
+   (.settings-overlay's colour and blur), under the toolbar (30) and over the
+   scene. A tap on it lands on the page, not the canvas, so the window-level
+   close listeners shut the menu without also acting on the scene. */
+@media (hover: none) and (pointer: coarse) {
+  #app:has(#bookmarks-menu:not([hidden]), #shortcuts-menu:not([hidden]), #language-menu:not([hidden]))::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 29;
+    background: rgba(3, 6, 12, 0.72);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+  }
 }

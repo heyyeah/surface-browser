@@ -1,6 +1,6 @@
 # Surface Browser
 
-Surface Browser is an immersive 3D web browser art piece I started in 2003. Enter
+Surface Browser is an experimental immersive 3D web browser art piece I started in 2003. Enter
 a web address, an image search or an AI image prompt, and the images found
 stream toward you through a curving tunnel, which opens into an interactive
 sphere of those images. Rotate the sphere, select an image, and you travel
@@ -25,18 +25,15 @@ versions. [About the work](https://boxc.net/surfacebrowser.html).
 (Apple silicon). Open it and drag Surface Browser to Applications.
 
 **[Download for Windows](https://github.com/heyyeah/surface-browser/releases/latest/download/Surface-Browser-win-x64-setup.exe)**
-(64-bit). The installer is not signed yet, so Windows asks you to confirm the
+(64-bit). The installer is not signed, so Windows asks you to confirm the
 first time: **More info**, then **Run anyway**.
-
-This is the easiest way to run Surface Browser on your
-own computer.
 
 Web addresses work straight away. Image search and AI images are set up in the
 app's settings panel, or in a `.env` file in its data folder; see [`desktop/README.md`](desktop/README.md).
 
 ## Run from source
 
-For everything the apps do not do: VR in your own headset, an Intel Mac, voice input, hosting it for other people, or changing the code.
+How it compares with the desktop app:
 
 | | Desktop app | From source |
 |---|---|---|
@@ -112,9 +109,26 @@ This is a published copy of my working repository. Issues and pull requests are
 welcome; accepted changes are carried across by hand, so a merged contribution
 shows up, with credit, in the next release.
 
+## Privacy
+
+Surface Browser sends nothing to other networked systems except what you ask it
+to fetch and the desktop app's update check:
+
+- web addresses you enter are fetched from those sites;
+- image searches go to DuckDuckGo, or to the search provider you set up
+  ([DuckDuckGo privacy policy](https://duckduckgo.com/privacy));
+- AI image prompts go to the image service you set up, if any;
+- the desktop app checks GitHub for a new version each time it starts
+  ([GitHub privacy statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement)).
+
+## Uninstalling
+
+On Windows, use **Settings → Apps → Installed apps**. On a Mac,
+drag Surface Browser from Applications to the Bin.
+
 ## Thanks and credits
 
-Additional support from ACMI and ZKM Karlsruhe. Thanks to Maria Stark at NESTA.
+Additional support from ACMI, IMA and ZKM Karlsruhe. Thanks to Maria Stark at NESTA.
 
 - Artist: Tim Plaisted
 - Code: Tim Plaisted, Ryan Hodge (rendering, 2003), Nick Kaltner (networking,
@@ -124,6 +138,6 @@ Shown at NESTA, Switch Media, ACMI, IMA, MAAP Festival and ZKM.
 
 ## Licence
 
-The software is MIT licensed: see `LICENSE`. The artwork (the name, the visual
-and spatial design, and any images shipped with a release) is licensed
-separately under CC BY-NC-SA 4.0: see `LICENSE-ART`.
+Every file in this repository and in the downloads is MIT licensed: see
+`LICENSE`. The artwork (the name, and the visual and spatial design of the
+piece) is licensed separately under CC BY-NC-SA 4.0: see `LICENSE-ART`.
