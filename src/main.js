@@ -126,6 +126,7 @@ import { setWristPanelHand, updateWristLauncher } from "./wristui.js";
 import { tickFpsMeter } from "./fps-meter.js";
 import { updateControllerCallouts } from "./controller-callouts.js";
 import { setSubmissionsEnabled } from "./submissions.js";
+import { setupDesktopUpdates } from "./desktop-update.js";
 import {
   beginPassthroughSession,
   endPassthroughSession,
@@ -1217,6 +1218,7 @@ setupBookmarks({
 // builds.
 initLanguage();
 setupShortcutsMenu();
+setupDesktopUpdates();
 // Both of the panel's conditions are async: isSessionSupported() answers after
 // boot, and /api/health decides whether GenAI rows belong
 // (configureApiCapabilities re-renders for that).

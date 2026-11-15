@@ -6,7 +6,7 @@
 // Pages that need JavaScript render in a hidden Electron window instead of
 // Playwright (page-renderer.mjs).
 
-import { app, BrowserWindow, dialog, Menu, shell } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, shell } from "electron";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -18,8 +18,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = fs.existsSync(path.join(HERE, "server")) ? HERE : path.resolve(HERE, "..");
 const importFrom = (rel) => import(pathToFileURL(path.join(ROOT, rel)).href);
 
-// Windows shows notifications (the update one) only for the app ID that the
-// installer's shortcut carries.
+// Matches the installer's shortcut, so Windows groups the window under it.
 if (process.platform === "win32") {
   app.setAppUserModelId("net.boxc.surfacebrowser");
 }
@@ -138,7 +137,12 @@ function createWindow() {
     minHeight: 600,
     backgroundColor: "#0b1220",
     title: "Surface Browser",
-    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false }
+    webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: path.join(HERE, "preload.cjs")
+    }
   });
   // The app's own pages stay in the window; any other link opens in the
   // system browser, so no web page ever runs with the app's origin.
@@ -164,8 +168,8 @@ function createWindow() {
 }
 
 // Update state has one writer, setUpdateState(). Values: "idle" | "checking" |
-// "downloading" | "ready". electron-updater downloads on its own once it finds
-// a newer release; "ready" lasts until the app restarts.
+// "available" | "downloading" | "installing". Nothing downloads until the
+// visitor clicks Update; after that it installs and restarts without asking again.
 let updateState = "idle";
 let updateVersion = "";
 let manualCheck = false;
@@ -180,56 +184,66 @@ function updatesSupported() {
   return app.isPackaged && ["darwin", "win32"].includes(process.platform);
 }
 
-function showMessage(options) {
-  const opts = { title: "Surface Browser", buttons: ["OK"], ...options };
-  return mainWindow ? dialog.showMessageBox(mainWindow, opts) : dialog.showMessageBox(opts);
+// The page shows these as a toast (src/desktop-update.js). Kinds: "available" |
+// "downloading" | "latest" | "error" | "failed" | "checking" | "unsupported".
+function notifyPage(kind, version = updateVersion) {
+  mainWindow?.webContents.send("update-notice", { kind, version });
 }
 
-async function promptRestart() {
-  const { response } = await showMessage({
-    type: "info",
-    message: `Surface Browser ${updateVersion} is ready to install.`,
-    detail: "Restart now to update, or it installs the next time you quit.",
-    buttons: ["Restart now", "Later"],
-    defaultId: 0,
-    cancelId: 1
-  });
-  if (response === 0) {
-    (await updaterPromise).autoUpdater.quitAndInstall();
-  }
+function fromMainWindow(event) {
+  return mainWindow !== null && event.sender === mainWindow.webContents;
 }
+
+// The startup check can find an update before the page has loaded.
+ipcMain.handle("update-pending", (event) =>
+  fromMainWindow(event) && ["available", "downloading"].includes(updateState)
+    ? { kind: updateState, version: updateVersion }
+    : null);
+
+ipcMain.on("update-download", async (event) => {
+  if (!fromMainWindow(event) || updateState !== "available") {
+    return;
+  }
+  setUpdateState("downloading");
+  notifyPage("downloading");
+  try {
+    await (await updaterPromise).autoUpdater.downloadUpdate();
+  } catch {
+    // The "error" event has already reported it.
+  }
+});
 
 function getUpdater() {
   updaterPromise ??= import("electron-updater").then(({ default: updater }) => {
     const { autoUpdater } = updater;
+    autoUpdater.autoDownload = false;
     autoUpdater.on("update-available", (info) => {
-      setUpdateState("downloading", info.version);
-      if (manualCheck) {
-        manualCheck = false;
-        void showMessage({
-          type: "info",
-          message: `Downloading Surface Browser ${info.version}.`,
-          detail: "You will be asked to restart when it is ready."
-        });
-      }
+      manualCheck = false;
+      setUpdateState("available", info.version);
+      notifyPage("available");
     });
     autoUpdater.on("update-not-available", () => {
       setUpdateState("idle");
       if (manualCheck) {
         manualCheck = false;
-        void showMessage({ type: "info", message: `Surface Browser ${app.getVersion()} is the latest version.` });
+        notifyPage("latest", app.getVersion());
       }
     });
     autoUpdater.on("update-downloaded", (info) => {
-      setUpdateState("ready", info.version);
-      void promptRestart();
+      setUpdateState("installing", info.version);
+      autoUpdater.quitAndInstall();
     });
     autoUpdater.on("error", (err) => {
-      console.warn("Update check failed:", err?.message);
+      console.warn("Update failed:", err?.message);
+      if (updateState === "downloading" || updateState === "installing") {
+        setUpdateState("available");
+        notifyPage("failed");
+        return;
+      }
       setUpdateState("idle");
       if (manualCheck) {
         manualCheck = false;
-        void showMessage({ type: "warning", message: "Could not check for updates.", detail: err?.message || "" });
+        notifyPage("error");
       }
     });
     return updater;
@@ -240,24 +254,13 @@ function getUpdater() {
 async function checkForUpdates({ manual = false } = {}) {
   if (!updatesSupported()) {
     if (manual) {
-      void showMessage({ type: "info", message: "Updates work only in the installed app." });
-    }
-    return;
-  }
-  if (updateState === "ready") {
-    if (manual) {
-      void promptRestart();
+      notifyPage("unsupported");
     }
     return;
   }
   if (updateState !== "idle") {
-    if (manual) {
-      void showMessage({
-        type: "info",
-        message: updateState === "downloading"
-          ? `Surface Browser ${updateVersion} is downloading.`
-          : "Already checking for updates."
-      });
+    if (manual && updateState !== "installing") {
+      notifyPage(updateState);
     }
     return;
   }
@@ -265,7 +268,7 @@ async function checkForUpdates({ manual = false } = {}) {
   setUpdateState("checking");
   try {
     await (await getUpdater()).autoUpdater.checkForUpdates();
-  } catch (err) {
+  } catch {
     // The "error" event has already reported it.
     if (updateState === "checking") {
       setUpdateState("idle");

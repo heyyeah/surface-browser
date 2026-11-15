@@ -42,7 +42,7 @@ How it compares with the desktop app:
 | Host it for others | no | yes |
 | Voice input | no | yes |
 | Intel Mac | no | yes |
-| Updates | automatic | `git pull` |
+| Updates | offered in the app | `git pull` |
 
 Needs Node 24+ from https://nodejs.org/ (see `.nvmrc`).
 
@@ -118,7 +118,8 @@ to fetch and the desktop app's update check:
 - image searches go to DuckDuckGo, or to the search provider you set up
   ([DuckDuckGo privacy policy](https://duckduckgo.com/privacy));
 - AI image prompts go to the image service you set up, if any;
-- the desktop app checks GitHub for a new version each time it starts
+- the desktop app checks GitHub for a new version each time it starts, and
+  downloads it only if you click Update
   ([GitHub privacy statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement)).
 
 ## Uninstalling

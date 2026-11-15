@@ -8,8 +8,8 @@ behaves like the web version running locally, settings panel included.
 
 Download [`Surface-Browser-mac-arm64.dmg`](https://github.com/heyyeah/surface-browser/releases/latest/download/Surface-Browser-mac-arm64.dmg)
 from the [latest release](https://github.com/heyyeah/surface-browser/releases/latest),
-open it and drag the app to Applications. It is signed and notarized, and it
-updates itself when a new release is published.
+open it and drag the app to Applications. It is signed and notarized. When a new release
+is published, the app offers it and updates when you click **Update**.
 
 Intel Macs are not supported by the download; build it yourself as below.
 
@@ -17,9 +17,9 @@ Intel Macs are not supported by the download; build it yourself as below.
 
 Download [`Surface-Browser-win-x64-setup.exe`](https://github.com/heyyeah/surface-browser/releases/latest/download/Surface-Browser-win-x64-setup.exe)
 from the [latest release](https://github.com/heyyeah/surface-browser/releases/latest)
-and run it. The installer is not signed yet, so Windows SmartScreen warns about
-it: choose **More info**, then **Run anyway**. The app updates itself when a new
-release is published.
+and run it. The installer is not signed, so Windows SmartScreen warns about
+it: choose **More info**, then **Run anyway**. The app offers new releases the
+same way as on the Mac.
 
 To build the installer yourself:
 

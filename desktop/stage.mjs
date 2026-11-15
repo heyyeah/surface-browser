@@ -33,7 +33,7 @@ for (const rel of tracked) {
   fs.copyFileSync(path.join(WEB, rel), path.join(APP, rel));
 }
 fs.cpSync(path.join(WEB, "dist"), path.join(APP, "dist"), { recursive: true });
-for (const file of ["main.mjs", "page-renderer.mjs"]) {
+for (const file of ["main.mjs", "page-renderer.mjs", "preload.cjs"]) {
   fs.copyFileSync(path.join(DESKTOP, file), path.join(APP, file));
 }
 
